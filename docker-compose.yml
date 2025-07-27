@@ -1,0 +1,73 @@
+# version: '3.8'
+
+services:
+  # MongoDB (DocumentDB alternative for local development)
+  mongodb:
+    image: mongo:6.0
+    container_name: voice-agent-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+      - MONGO_INITDB_DATABASE=voice_agent
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - voice-agent-network
+
+  # Redis for session caching
+  redis:
+    image: redis:7-alpine
+    container_name: voice-agent-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redis123
+    volumes:
+      - redis_data:/data
+    networks:
+      - voice-agent-network
+
+  # ECS API Service (Twilio webhooks)
+  api-service:
+    build: ./ecs-api-service
+    container_name: voice-agent-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DOCUMENTDB_HOST=mongodb
+      - REDIS_URL=redis://:redis123@redis:6379
+      - PYTHONPATH=/app
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - voice-agent-network
+    restart: unless-stopped
+
+  # ECS Worker Service (Campaign processing)
+  worker-service:
+    build: ./ecs-worker-service
+    container_name: voice-agent-worker
+    env_file:
+      - .env
+    environment:
+      - DOCUMENTDB_HOST=mongodb
+      - REDIS_URL=redis://:redis123@redis:6379
+      - PYTHONPATH=/app
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - voice-agent-network
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  voice-agent-network:
+    driver: bridge

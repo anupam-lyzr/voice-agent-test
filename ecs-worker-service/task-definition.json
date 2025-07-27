@@ -1,0 +1,40 @@
+{
+  "family": "voice-agent-worker-service",
+  "networkMode": "awsvpc", 
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/voiceAgentWorkerTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "worker-service",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/voice-agent-worker:latest",
+      "essential": true,
+      "environment": [
+        {
+          "name": "AWS_DEFAULT_REGION",
+          "value": "us-east-1"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DOCUMENTDB_HOST",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:voice-agent/documentdb"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:voice-agent/redis"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/voice-agent-worker",
+          "awslogs-region": "us-east-1", 
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

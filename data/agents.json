@@ -1,0 +1,49 @@
+{
+  "agents": [
+    {
+      "id": "agent_1",
+      "name": "Sarah Johnson",
+      "email": "sarah@altruisadvisor.com",
+      "googleCalendarId": "sarah@altruisadvisor.com",
+      "timezone": "America/New_York",
+      "workingHours": "9AM-5PM",
+      "specialties": ["health", "family"]
+    },
+    {
+      "id": "agent_2", 
+      "name": "Michael Chen",
+      "email": "michael@altruisadvisor.com",
+      "googleCalendarId": "michael@altruisadvisor.com",
+      "timezone": "America/New_York",
+      "workingHours": "9AM-5PM",
+      "specialties": ["auto", "home"]
+    },
+    {
+      "id": "agent_3",
+      "name": "Emily Rodriguez",
+      "email": "emily@altruisadvisor.com", 
+      "googleCalendarId": "emily@altruisadvisor.com",
+      "timezone": "America/New_York",
+      "workingHours": "9AM-5PM",
+      "specialties": ["life", "disability"]
+    },
+    {
+      "id": "agent_4",
+      "name": "James Thompson",
+      "email": "james@altruisadvisor.com",
+      "googleCalendarId": "james@altruisadvisor.com", 
+      "timezone": "America/New_York",
+      "workingHours": "9AM-5PM",
+      "specialties": ["business", "commercial"]
+    },
+    {
+      "id": "agent_5",
+      "name": "Amanda Foster",
+      "email": "amanda@altruisadvisor.com",
+      "googleCalendarId": "amanda@altruisadvisor.com",
+      "timezone": "America/New_York", 
+      "workingHours": "9AM-5PM",
+      "specialties": ["medicare", "senior"]
+    }
+  ]
+}
