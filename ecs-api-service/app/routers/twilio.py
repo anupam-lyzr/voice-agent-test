@@ -1,5 +1,5 @@
 """
-Twilio Webhook Router
+Twilio Webhook Router - Updated with TwiML Helpers
 Handles all Twilio webhook endpoints for voice processing
 """
 
@@ -18,7 +18,14 @@ from shared.utils.database import client_repo, get_client_by_phone
 from shared.utils.redis_client import cache_session, get_cached_session
 
 from services.hybrid_tts import HybridTTSService
-from services.voice_processor import VoiceProcessor
+from services.voice_processor import VoiceProcessor, update_client_record
+from services.twiml_helpers import (
+    create_simple_twiml,
+    create_voice_twiml,
+    create_fallback_twiml,
+    create_media_stream_twiml,
+    create_hangup_twiml
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio", tags=["Twilio Webhooks"])
@@ -38,7 +45,7 @@ async def voice_webhook(
 ):
     """Handle incoming voice calls and initiate conversation"""
     
-    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus}")
+    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From}")
     
     try:
         if CallStatus == "in-progress":
@@ -77,7 +84,10 @@ async def voice_webhook(
             audio_result = await hybrid_tts.get_response_audio(
                 text=greeting_text,
                 response_type="greeting",
-                client_data=client.client.model_dump_for_greeting()
+                client_data={
+                    "client_name": client.client.full_name,
+                    "first_name": client.client.first_name
+                }
             )
             
             # Create TwiML response
@@ -109,8 +119,12 @@ async def voice_webhook(
             
             return Response(content=twiml, media_type="application/xml")
         
+        elif CallStatus == "ringing":
+            # Call is ringing, return empty response
+            return Response(content="<Response></Response>", media_type="application/xml")
+        
         else:
-            # Other call statuses
+            # Other call statuses (completed, failed, etc.)
             return Response(content="<Response></Response>", media_type="application/xml")
             
     except Exception as e:
@@ -125,11 +139,12 @@ async def speech_webhook(
     request: Request,
     CallSid: str = Form(...),
     SpeechResult: Optional[str] = Form(None),
-    From: Optional[str] = Form(None)
+    From: Optional[str] = Form(None),
+    Digits: Optional[str] = Form(None)
 ):
     """Process customer speech and generate response"""
     
-    logger.info(f"🗣️ Speech webhook: {CallSid} - Speech: '{SpeechResult}'")
+    logger.info(f"🗣️ Speech webhook: {CallSid} - Speech: '{SpeechResult}' - Digits: '{Digits}'")
     
     try:
         # Get session from cache
@@ -141,10 +156,20 @@ async def speech_webhook(
                 media_type="application/xml"
             )
         
+        # Use speech result or digits
+        customer_input = SpeechResult or Digits or ""
+        
+        if not customer_input.strip():
+            # No input received
+            return Response(
+                content=create_simple_twiml("I didn't hear you. Thank you for your time. Goodbye."),
+                media_type="application/xml"
+            )
+        
         # Process speech with voice processor
         response_result = await voice_processor.process_customer_speech(
             session=session,
-            customer_speech=SpeechResult or "",
+            customer_speech=customer_input,
             client_phone=From
         )
         
@@ -164,9 +189,10 @@ async def speech_webhook(
         
         # Create conversation turn
         turn = ConversationTurn(
+            turn_number=len(session.conversation_turns) + 1,
             agent_response=response_result["response_text"],
-            customer_speech=SpeechResult,
-            response_type=ResponseType.STATIC_AUDIO if audio_result["type"] == "static" else ResponseType.DYNAMIC_TTS,
+            customer_speech=customer_input,
+            response_type=ResponseType.STATIC_AUDIO if audio_result.get("type") == "static" else ResponseType.DYNAMIC_TTS,
             audio_url=audio_result["audio_url"] if audio_result["success"] else None,
             conversation_stage=session.conversation_stage,
             customer_intent=response_result.get("detected_intent"),
@@ -221,7 +247,7 @@ async def speech_webhook(
     except Exception as e:
         logger.error(f"❌ Speech processing error: {e}")
         return Response(
-            content=create_simple_twiml("Thank you for your time. Have a great day!"),
+            content=create_simple_twiml("Thank you for your time."),
             media_type="application/xml"
         )
 
@@ -230,7 +256,8 @@ async def status_webhook(
     request: Request,
     CallSid: str = Form(...),
     CallStatus: str = Form(...),
-    CallDuration: Optional[str] = Form(None)
+    CallDuration: Optional[str] = Form(None),
+    RecordingUrl: Optional[str] = Form(None)
 ):
     """Handle call status updates from Twilio"""
     
@@ -247,6 +274,9 @@ async def status_webhook(
                     
                     if CallDuration:
                         session.session_metrics.total_call_duration_seconds = int(CallDuration)
+                    
+                    if RecordingUrl:
+                        session.recording_url = RecordingUrl
                     
                     await cache_session(session)
                     
@@ -267,123 +297,90 @@ async def media_stream_websocket(websocket: WebSocket, session_id: str):
     
     try:
         while True:
-            # Receive audio data from Twilio
             data = await websocket.receive_text()
-            message = json.loads(data)
             
-            if message["event"] == "media":
-                # Process real-time audio
-                audio_data = message["media"]["payload"]
+            try:
+                message = json.loads(data)
+                event = message.get("event")
                 
-                # TODO: Implement real-time STT and response
-                # This would integrate Deepgram for real-time transcription
-                # and provide even faster response times
+                if event == "connected":
+                    logger.info(f"📡 Media stream connected for {session_id}")
+                    await websocket.send_text(json.dumps({
+                        "event": "connected",
+                        "session_id": session_id
+                    }))
                 
-                logger.debug(f"📡 Received audio chunk: {len(audio_data)} bytes")
-            
-            elif message["event"] == "start":
-                logger.info(f"🎤 Media stream started: {message}")
-            
-            elif message["event"] == "stop":
-                logger.info(f"🛑 Media stream stopped: {message}")
-                break
+                elif event == "start":
+                    logger.info(f"🎙️ Media stream started for {session_id}")
+                    
+                elif event == "media":
+                    # Handle incoming audio data
+                    media_data = message.get("media", {})
+                    payload = media_data.get("payload")
+                    
+                    if payload:
+                        # Process audio payload (base64 encoded audio)
+                        # This would integrate with real-time STT
+                        pass
+                
+                elif event == "stop":
+                    logger.info(f"🛑 Media stream stopped for {session_id}")
+                    break
+                    
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON in media stream: {data[:100]}...")
                 
     except WebSocketDisconnect:
         logger.info(f"🔌 Media stream disconnected: {session_id}")
+    
     except Exception as e:
         logger.error(f"❌ Media stream error: {e}")
+        await websocket.close()
 
-# Helper functions
-
-def create_voice_twiml(audio_url: str, gather_action: str, session_id: str) -> str:
-    """Create TwiML for voice response with gather"""
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Play>{audio_url}</Play>
-    <Gather 
-        input="speech" 
-        action="{gather_action}" 
-        method="POST" 
-        speechTimeout="3"
-        timeout="8"
-        language="en-US"
-        enhanced="true">
-    </Gather>
-    <Say voice="alice">I'm here to help with any questions you have.</Say>
-</Response>"""
-
-def create_fallback_twiml(text: str, gather_action: str) -> str:
-    """Create TwiML with Twilio's built-in TTS as fallback"""
-    clean_text = text.replace("&", "and").replace("<", "").replace(">", "")[:500]
+# Additional testing endpoints
+@router.post("/test")
+async def test_webhook(request: Request):
+    """Test webhook endpoint for development"""
     
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice" language="en-US">{clean_text}</Say>
-    <Gather 
-        input="speech" 
-        action="{gather_action}" 
-        method="POST" 
-        speechTimeout="3"
-        timeout="8"
-        language="en-US"
-        enhanced="true">
-    </Gather>
-    <Say voice="alice">Please let me know how I can help.</Say>
-</Response>"""
-
-def create_simple_twiml(text: str) -> str:
-    """Create simple TwiML for ending calls"""
-    clean_text = text.replace("&", "and").replace("<", "").replace(">", "")[:500]
-    
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice" language="en-US">{clean_text}</Say>
-</Response>"""
-
-async def update_client_record(session: CallSession, response_result: Dict[str, Any]):
-    """Update client record with call results"""
     try:
-        if not client_repo:
-            return
+        form_data = await request.form()
         
-        # Determine call outcome
-        outcome = CallOutcome.COMPLETED
-        if response_result.get("customer_interested"):
-            outcome = CallOutcome.INTERESTED
-        elif response_result.get("customer_not_interested"):
-            outcome = CallOutcome.NOT_INTERESTED
-        elif response_result.get("dnc_requested"):
-            outcome = CallOutcome.DNC_REQUESTED
+        logger.info(f"🧪 Test webhook called with: {dict(form_data)}")
         
-        # Create call attempt record
-        call_attempt = {
-            "attempt_number": len(session.conversation_turns),
-            "timestamp": session.started_at,
-            "outcome": outcome.value,
-            "duration_seconds": session.session_metrics.total_call_duration_seconds,
-            "twilio_call_sid": session.twilio_call_sid,
-            "transcript": session.get_transcript(),
-            "conversation_turns": len(session.conversation_turns),
-            "static_responses_used": session.session_metrics.static_responses_used,
-            "dynamic_responses_used": session.session_metrics.dynamic_responses_used,
-            "avg_response_time_ms": session.session_metrics.avg_response_time_ms
-        }
-        
-        # Add to client record
-        await client_repo.add_call_attempt(session.client_id, call_attempt)
-        
-        # Add CRM tags based on outcome
-        if outcome == CallOutcome.INTERESTED:
-            from shared.models.client import CRMTag
-            await client_repo.add_crm_tag(session.client_id, CRMTag.INTERESTED)
-            
-            # TODO: Trigger agent assignment
-            
-        elif outcome == CallOutcome.DNC_REQUESTED:
-            from shared.models.client import CRMTag
-            await client_repo.add_crm_tag(session.client_id, CRMTag.DNC_REQUESTED)
-        
-        logger.info(f"✅ Updated client record: {session.client_id} - Outcome: {outcome.value}")
+        return Response(
+            content=create_simple_twiml("Test webhook received successfully!"),
+            media_type="application/xml"
+        )
         
     except Exception as e:
-        logger.error(f"❌ Failed to update client record: {e}")
+        logger.error(f"❌ Test webhook error: {e}")
+        return Response(
+            content=create_simple_twiml("Test webhook failed."),
+            media_type="application/xml"
+        )
+
+@router.get("/test-tts")
+async def test_tts(text: str = "Hello, this is a test of our voice system."):
+    """Test TTS generation"""
+    
+    try:
+        audio_result = await hybrid_tts.get_response_audio(
+            text=text,
+            response_type="test",
+            client_data={"client_name": "Test User"}
+        )
+        
+        return {
+            "success": audio_result["success"],
+            "audio_url": audio_result.get("audio_url"),
+            "type": audio_result.get("type"),
+            "generation_time_ms": audio_result.get("generation_time_ms"),
+            "text": text
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ TTS test error: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }

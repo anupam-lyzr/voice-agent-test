@@ -199,7 +199,7 @@ class ClientRepository:
             logger.error(f"Failed to add call attempt for client {client_id}: {e}")
             return False
     
-    async def assign_agent(self, client_id: str, agent_id: str, meeting_time: Optional[datetime] = None) -> bool:
+    async def assign_agent(self, client_id: str, agent_id: str, agent_name: str = None) -> bool:
         """Assign agent to client"""
         try:
             if not ObjectId.is_valid(client_id):
@@ -207,10 +207,10 @@ class ClientRepository:
             
             assignment = {
                 "agentId": agent_id,
+                "agentName": agent_name or agent_id,
                 "assignedAt": datetime.utcnow(),
                 "assignmentReason": "interested",
-                "meetingScheduled": meeting_time,
-                "meetingStatus": "pending" if meeting_time else "not_scheduled"
+                "meetingStatus": "pending"
             }
             
             result = await self.db.clients.update_one(
@@ -218,6 +218,9 @@ class ClientRepository:
                 {
                     "$set": {
                         "agentAssignment": assignment,
+                        "agentAssigned": agent_id,  # For compatibility
+                        "agentName": agent_name or agent_id,  # For compatibility
+                        "assignedAt": datetime.utcnow(),
                         "updatedAt": datetime.utcnow()
                     }
                 }
@@ -354,6 +357,149 @@ class ClientRepository:
         except Exception as e:
             logger.error(f"Failed to get campaign stats: {e}")
             return {}
+        
+
+    async def get_clients_needing_crm_update(self, limit: int = 50) -> List[Client]:
+        """Get clients that need CRM updates"""
+        try:
+            query = {
+                "campaignStatus": CampaignStatus.COMPLETED.value,
+                "crmUpdated": {"$ne": True},
+                "callHistory": {"$exists": True, "$not": {"$size": 0}}
+            }
+            
+            cursor = self.db.clients.find(query).limit(limit)
+            clients = []
+            
+            async for doc in cursor:
+                doc["id"] = str(doc["_id"])
+                clients.append(Client(**doc))
+            
+            return clients
+        except Exception as e:
+            logger.error(f"Error getting clients for CRM update: {e}")
+            return []
+
+    async def get_clients_needing_assignment(self, limit: int = 20) -> List[Client]:
+        """Get clients that need agent assignment"""
+        try:
+            query = {
+                "crmTags": CRMTag.INTERESTED.value,
+                "agentAssignment": {"$exists": False}
+            }
+            
+            cursor = self.db.clients.find(query).limit(limit)
+            clients = []
+            
+            async for doc in cursor:
+                doc["id"] = str(doc["_id"])
+                clients.append(Client(**doc))
+            
+            return clients
+        except Exception as e:
+            logger.error(f"Error getting clients for assignment: {e}")
+            return []
+
+    async def mark_clients_ready_for_campaign(self, batch_size: int) -> int:
+        """Mark clients as ready for campaign"""
+        try:
+            result = await self.db.clients.update_many(
+                {
+                    "campaignStatus": CampaignStatus.PENDING.value,
+                    "totalAttempts": {"$lt": settings.max_call_attempts}
+                },
+                {"$set": {"campaignStatus": CampaignStatus.IN_PROGRESS.value}},
+                limit=batch_size
+            )
+            return result.modified_count
+        except Exception as e:
+            logger.error(f"Error marking clients ready: {e}")
+            return 0
+
+    async def update_client_campaign_status(self, client_id: str, status: str):
+        """Update client campaign status"""
+        try:
+            await self.db.clients.update_one(
+                {"_id": ObjectId(client_id)},
+                {"$set": {"campaignStatus": status, "updatedAt": datetime.utcnow()}}
+            )
+        except Exception as e:
+            logger.error(f"Error updating client status: {e}")
+
+    async def get_latest_call_outcome(self, client_id: str) -> Optional[CallOutcome]:
+        """Get latest call outcome for client"""
+        try:
+            doc = await self.db.clients.find_one(
+                {"_id": ObjectId(client_id)},
+                {"callHistory": {"$slice": -1}}
+            )
+            
+            if doc and doc.get("callHistory"):
+                latest_call = doc["callHistory"][-1]
+                outcome_str = latest_call.get("outcome")
+                if outcome_str:
+                    return CallOutcome(outcome_str)
+            return None
+        except Exception as e:
+            logger.error(f"Error getting latest call outcome: {e}")
+            return None
+
+    async def get_latest_call_summary(self, client_id: str) -> Optional[Dict[str, Any]]:
+        """Get latest call summary for client"""
+        try:
+            doc = await self.db.clients.find_one(
+                {"_id": ObjectId(client_id)},
+                {"callHistory": {"$slice": -1}}
+            )
+            
+            if doc and doc.get("callHistory"):
+                latest_call = doc["callHistory"][-1]
+                return {
+                    "outcome": latest_call.get("outcome"),
+                    "duration_seconds": latest_call.get("duration", 0),
+                    "summary": latest_call.get("summary", ""),
+                    "key_points": latest_call.get("keyPoints", []),
+                    "next_actions": latest_call.get("nextActions", []),
+                    "agent_assigned": latest_call.get("agentAssigned"),
+                    "timestamp": latest_call.get("timestamp")
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error getting call summary: {e}")
+            return None
+
+    async def mark_crm_updated(self, client_id: str):
+        """Mark client as CRM updated"""
+        try:
+            await self.db.clients.update_one(
+                {"_id": ObjectId(client_id)},
+                {"$set": {"crmUpdated": True, "crmUpdatedAt": datetime.utcnow(), "updatedAt": datetime.utcnow()}}
+            )
+        except Exception as e:
+            logger.error(f"Error marking CRM updated: {e}")
+
+    async def get_agent_assigned_count(self, agent_id: str) -> int:
+        """Get number of clients assigned to agent"""
+        try:
+            count = await self.db.clients.count_documents({
+                "agentAssignment.agentId": agent_id
+            })
+            return count
+        except Exception as e:
+            logger.error(f"Error getting agent assignment count: {e}")
+            return 0
+
+    async def update_call_outcome(self, client_id: str, outcome: CallOutcome):
+        """Update call outcome for client"""
+        try:
+            outcome_value = outcome.value if hasattr(outcome, 'value') else str(outcome)
+            
+            await self.db.clients.update_one(
+                {"_id": ObjectId(client_id)},
+                {"$set": {"latestCallOutcome": outcome_value, "updatedAt": datetime.utcnow()}}
+            )
+        except Exception as e:
+            logger.error(f"Error updating call outcome: {e}")
 
 class SessionRepository:
     """Repository for call session operations"""

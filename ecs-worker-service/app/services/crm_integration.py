@@ -1,465 +1,455 @@
 """
 CRM Integration Service
-Handles Capsule CRM operations and Google Calendar scheduling
+Handles Capsule CRM operations and tagging
 """
 
 import asyncio
 import httpx
-import json
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from shared.config.settings import settings
-from shared.models.client import Client, CRMTag
+from shared.models.client import Client, CRMTag, CallOutcome
 from shared.utils.database import client_repo
 
 logger = logging.getLogger(__name__)
 
-class CRMIntegrationService:
-    """Service for CRM operations and agent assignment"""
+class CRMIntegration:
+    """Handles integration with Capsule CRM"""
     
     def __init__(self):
-        # HTTP clients
-        self.capsule_session = httpx.AsyncClient(
-            base_url=settings.capsule_api_url,
-            timeout=10.0
+        self.api_url = settings.capsule_api_url or "https://api.capsulecrm.com"
+        self.api_token = settings.capsule_api_token
+        
+        # HTTP client for API calls
+        self.httpx_client = httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "Authorization": f"Bearer {self.api_token}" if self.api_token else "",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
         )
-        self.google_session = httpx.AsyncClient(timeout=10.0)
         
-        # Load agent configuration
-        self.agents = self._load_agent_config()
+        # CRM tag mappings
+        self.tag_mappings = {
+            CRMTag.INTERESTED: "LYZR-UC1-INTERESTED",
+            CRMTag.NOT_INTERESTED: "LYZR-UC1-NOT-INTERESTED", 
+            CRMTag.DNC_REQUESTED: "LYZR-UC1-DNC-REQUESTED",
+            CRMTag.NO_CONTACT: "LYZR-UC1-NO-CONTACT",
+            CRMTag.INVALID_NUMBER: "LYZR-UC1-INVALID-NUMBER",
+            CRMTag.INVALID_EMAIL: "LYZR-UC1-INVALID-EMAIL"
+        }
         
-        # Statistics
-        self.crm_updates = 0
-        self.agent_assignments = 0
-        self.meetings_scheduled = 0
+        # Check configuration
+        if not self.api_token:
+            logger.warning("⚠️ Capsule CRM API token not configured - CRM operations will be mocked")
     
-    def _load_agent_config(self) -> List[Dict[str, Any]]:
-        """Load agent configuration from file"""
-        try:
-            import json
-            with open("data/agents.json", "r") as f:
-                config = json.load(f)
-                return config.get("agents", [])
-        except Exception as e:
-            logger.error(f"Failed to load agent config: {e}")
-            return []
-    
-    async def process_interested_client(
-        self, 
-        client: Client,
-        call_summary: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Complete workflow for interested client"""
-        
-        logger.info(f"💼 Processing interested client: {client.client.full_name}")
+    async def update_client_record(self, client: Client) -> Dict[str, Any]:
+        """Update client record in Capsule CRM"""
         
         try:
-            results = {}
+            if not self.api_token:
+                return await self._mock_crm_update(client)
             
-            # 1. Update CRM with interested tag
-            crm_result = await self._update_crm_tags(client, [CRMTag.INTERESTED])
-            results["crm_update"] = crm_result
+            # Find person in CRM by phone or email
+            person_id = await self._find_person(client)
             
-            # 2. Assign to agent (use last agent or round-robin)
-            agent_result = await self._assign_agent(client)
-            results["agent_assignment"] = agent_result
+            if not person_id:
+                logger.warning(f"⚠️ Person not found in CRM: {client.client.full_name}")
+                return {
+                    "success": False,
+                    "error": "person_not_found",
+                    "client_id": client.id
+                }
             
-            if agent_result["success"]:
-                # 3. Schedule discovery call
-                meeting_result = await self._schedule_discovery_call(
-                    client, 
-                    agent_result["agent"],
-                    call_summary
-                )
-                results["meeting_scheduling"] = meeting_result
-                
-                # 4. Send notifications
-                notification_result = await self._send_notifications(
-                    client,
-                    agent_result["agent"], 
-                    meeting_result.get("meeting_time"),
-                    call_summary
-                )
-                results["notifications"] = notification_result
+            # Update tags based on call outcome
+            tag_result = await self._update_person_tags(person_id, client)
             
-            # Update statistics
-            if results["crm_update"]["success"]:
-                self.crm_updates += 1
-            if results["agent_assignment"]["success"]:
-                self.agent_assignments += 1
-            if results.get("meeting_scheduling", {}).get("success"):
-                self.meetings_scheduled += 1
+            # Add call notes
+            notes_result = await self._add_call_notes(person_id, client)
             
-            logger.info(f"✅ Interested client processing complete: {client.client.full_name}")
+            # Mark client as CRM updated
+            await client_repo.mark_crm_updated(client.id)
+            
+            logger.info(f"✅ CRM updated for {client.client.full_name}")
             
             return {
                 "success": True,
-                "client_id": client.id,
-                "client_name": client.client.full_name,
-                "results": results
+                "person_id": person_id,
+                "tags_updated": tag_result["success"],
+                "notes_added": notes_result["success"],
+                "client_id": client.id
             }
             
         except Exception as e:
-            logger.error(f"❌ Error processing interested client {client.id}: {e}")
+            logger.error(f"❌ CRM update error for {client.client.full_name}: {e}")
             return {
                 "success": False,
-                "client_id": client.id,
-                "error": str(e)
+                "error": str(e),
+                "client_id": client.id
             }
     
-    async def _update_crm_tags(self, client: Client, tags: List[CRMTag]) -> Dict[str, Any]:
-        """Update CRM tags for client"""
+    async def _find_person(self, client: Client) -> Optional[int]:
+        """Find person in Capsule CRM by phone or email"""
         
         try:
-            # Update local database
-            for tag in tags:
-                await client_repo.add_crm_tag(client.id, tag)
+            # Search by phone number first
+            if client.client.phone:
+                phone_search = await self._search_by_phone(client.client.phone)
+                if phone_search:
+                    return phone_search
             
-            # Update Capsule CRM if configured
-            if settings.capsule_api_key and not settings.capsule_api_key.startswith("your_"):
-                capsule_result = await self._update_capsule_crm(client, tags)
-                
-                return {
-                    "success": True,
-                    "local_update": True,
-                    "capsule_update": capsule_result["success"],
-                    "tags_added": [tag.value for tag in tags]
-                }
-            else:
-                return {
-                    "success": True,
-                    "local_update": True,
-                    "capsule_update": False,
-                    "message": "Capsule CRM not configured",
-                    "tags_added": [tag.value for tag in tags]
-                }
-                
-        except Exception as e:
-            logger.error(f"CRM tag update error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def _update_capsule_crm(self, client: Client, tags: List[CRMTag]) -> Dict[str, Any]:
-        """Update Capsule CRM with tags"""
-        
-        try:
-            # First, find or create person in Capsule
-            person_result = await self._find_or_create_capsule_person(client)
+            # Search by email if phone search fails
+            if client.client.email:
+                email_search = await self._search_by_email(client.client.email)
+                if email_search:
+                    return email_search
             
-            if not person_result["success"]:
-                return person_result
-            
-            person_id = person_result["person_id"]
-            
-            # Add tags to person
-            headers = {
-                "Authorization": f"Bearer {settings.capsule_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            for tag in tags:
-                tag_data = {
-                    "tag": {
-                        "name": tag.value,
-                        "description": f"Voice Agent Campaign - {datetime.utcnow().strftime('%Y-%m-%d')}"
-                    }
-                }
-                
-                response = await self.capsule_session.post(
-                    f"/api/v2/parties/{person_id}/tags",
-                    headers=headers,
-                    json=tag_data
-                )
-                
-                if response.status_code not in [200, 201]:
-                    logger.warning(f"Failed to add tag {tag.value}: {response.status_code}")
-            
-            return {"success": True, "person_id": person_id}
+            # Search by name as last resort
+            name_search = await self._search_by_name(client.client.first_name, client.client.last_name)
+            return name_search
             
         except Exception as e:
-            logger.error(f"Capsule CRM update error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def _find_or_create_capsule_person(self, client: Client) -> Dict[str, Any]:
-        """Find or create person in Capsule CRM"""
-        
-        try:
-            headers = {
-                "Authorization": f"Bearer {settings.capsule_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Search for existing person by email
-            search_response = await self.capsule_session.get(
-                f"/api/v2/parties",
-                headers=headers,
-                params={"q": client.client.email, "embed": "fields"}
-            )
-            
-            if search_response.status_code == 200:
-                data = search_response.json()
-                if data.get("parties"):
-                    person_id = data["parties"][0]["id"]
-                    logger.info(f"Found existing Capsule person: {person_id}")
-                    return {"success": True, "person_id": person_id, "created": False}
-            
-            # Create new person
-            person_data = {
-                "party": {
-                    "type": "person",
-                    "firstName": client.client.first_name,
-                    "lastName": client.client.last_name,
-                    "emailAddresses": [{"address": client.client.email}],
-                    "phoneNumbers": [{"number": client.client.phone}]
-                }
-            }
-            
-            create_response = await self.capsule_session.post(
-                "/api/v2/parties",
-                headers=headers,
-                json=person_data
-            )
-            
-            if create_response.status_code in [200, 201]:
-                person_id = create_response.json()["party"]["id"]
-                logger.info(f"Created new Capsule person: {person_id}")
-                
-                # Update client record with Capsule ID
-                await client_repo.update_client(client.id, {
-                    "capsule_person_id": person_id
-                })
-                
-                return {"success": True, "person_id": person_id, "created": True}
-            
-            return {"success": False, "error": f"Failed to create person: {create_response.status_code}"}
-            
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def _assign_agent(self, client: Client) -> Dict[str, Any]:
-        """Assign client to an agent"""
-        
-        try:
-            # Get agent (prefer last agent, fallback to round-robin)
-            agent = self._get_agent_for_client(client)
-            
-            if not agent:
-                return {"success": False, "error": "No agents available"}
-            
-            # Update client record
-            await client_repo.assign_agent(client.id, agent["id"])
-            
-            logger.info(f"👤 Assigned {client.client.full_name} to {agent['name']}")
-            
-            return {
-                "success": True,
-                "agent": agent,
-                "assignment_reason": "last_agent" if agent["id"] == client.client.last_agent else "round_robin"
-            }
-            
-        except Exception as e:
-            logger.error(f"Agent assignment error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    def _get_agent_for_client(self, client: Client) -> Optional[Dict[str, Any]]:
-        """Get the best agent for a client"""
-        
-        if not self.agents:
+            logger.error(f"❌ Error finding person in CRM: {e}")
             return None
-        
-        # Try to find the client's last agent
-        for agent in self.agents:
-            if agent["id"] == client.client.last_agent:
-                return agent
-        
-        # Fallback to first available agent (simple round-robin)
-        return self.agents[0] if self.agents else None
     
-    async def _schedule_discovery_call(
-        self,
-        client: Client,
-        agent: Dict[str, Any],
-        call_summary: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Schedule discovery call with agent"""
+    async def _search_by_phone(self, phone: str) -> Optional[int]:
+        """Search person by phone number"""
         
         try:
-            # Find next available slot for agent
-            meeting_time = await self._find_available_slot(agent)
+            # Clean phone number for search
+            clean_phone = phone.replace("+", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
             
-            if not meeting_time:
-                return {"success": False, "error": "No available slots found"}
-            
-            # Create calendar event if Google Calendar is configured
-            if self._is_google_calendar_configured():
-                calendar_result = await self._create_calendar_event(
-                    agent, client, meeting_time, call_summary
-                )
-                
-                return {
-                    "success": True,
-                    "meeting_time": meeting_time,
-                    "calendar_event": calendar_result
-                }
-            else:
-                # Just record the meeting time
-                await client_repo.update_client(client.id, {
-                    "agent_assignment.meeting_scheduled": meeting_time,
-                    "agent_assignment.meeting_status": "scheduled"
-                })
-                
-                return {
-                    "success": True,
-                    "meeting_time": meeting_time,
-                    "calendar_event": {"success": False, "message": "Google Calendar not configured"}
-                }
-                
-        except Exception as e:
-            logger.error(f"Meeting scheduling error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def _find_available_slot(self, agent: Dict[str, Any]) -> Optional[datetime]:
-        """Find next available 15-minute slot for agent"""
-        
-        # Simple logic: next business day at 10 AM
-        # In production, this would check Google Calendar availability
-        
-        tomorrow = datetime.utcnow() + timedelta(days=1)
-        
-        # Set to 10 AM
-        meeting_time = tomorrow.replace(hour=10, minute=0, second=0, microsecond=0)
-        
-        # Ensure it's a business day (Monday-Friday)
-        while meeting_time.weekday() >= 5:  # Saturday = 5, Sunday = 6
-            meeting_time += timedelta(days=1)
-        
-        return meeting_time
-    
-    def _is_google_calendar_configured(self) -> bool:
-        """Check if Google Calendar is properly configured"""
-        return (settings.google_calendar_client_id and 
-                settings.google_calendar_client_secret and
-                not settings.google_calendar_client_id.startswith("your_"))
-    
-    async def _create_calendar_event(
-        self,
-        agent: Dict[str, Any],
-        client: Client,
-        meeting_time: datetime,
-        call_summary: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Create Google Calendar event"""
-        
-        # TODO: Implement actual Google Calendar API integration
-        # This would require OAuth2 flow and proper token management
-        
-        logger.info(f"📅 Would create calendar event for {agent['name']} with {client.client.full_name}")
-        
-        return {
-            "success": False,
-            "message": "Google Calendar integration not implemented yet",
-            "would_create": {
-                "agent": agent["name"],
-                "client": client.client.full_name,
-                "time": meeting_time.isoformat(),
-                "duration": "15 minutes"
-            }
-        }
-    
-    async def _send_notifications(
-        self,
-        client: Client,
-        agent: Dict[str, Any],
-        meeting_time: Optional[datetime],
-        call_summary: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Send email notifications to agent and client"""
-        
-        try:
-            notifications_sent = []
-            
-            # Agent notification email
-            agent_email_result = await self._send_agent_notification(
-                agent, client, meeting_time, call_summary
+            response = await self.httpx_client.get(
+                f"{self.api_url}/api/v2/parties/search",
+                params={"q": clean_phone, "type": "person"}
             )
-            notifications_sent.append({
-                "type": "agent_notification",
-                "recipient": agent["email"],
-                "success": agent_email_result["success"]
-            })
             
-            # Client confirmation email (if meeting scheduled)
-            if meeting_time:
-                client_email_result = await self._send_client_confirmation(
-                    client, agent, meeting_time
-                )
-                notifications_sent.append({
-                    "type": "client_confirmation", 
-                    "recipient": client.client.email,
-                    "success": client_email_result["success"]
-                })
+            if response.status_code == 200:
+                data = response.json()
+                parties = data.get("parties", [])
+                
+                if parties:
+                    return parties[0]["party"]["id"]
             
-            return {
-                "success": True,
-                "notifications_sent": notifications_sent
-            }
+            return None
             
         except Exception as e:
-            logger.error(f"Notification sending error: {e}")
+            logger.error(f"❌ Phone search error: {e}")
+            return None
+    
+    async def _search_by_email(self, email: str) -> Optional[int]:
+        """Search person by email address"""
+        
+        try:
+            response = await self.httpx_client.get(
+                f"{self.api_url}/api/v2/parties/search",
+                params={"q": email, "type": "person"}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                parties = data.get("parties", [])
+                
+                if parties:
+                    return parties[0]["party"]["id"]
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Email search error: {e}")
+            return None
+    
+    async def _search_by_name(self, first_name: str, last_name: str) -> Optional[int]:
+        """Search person by name"""
+        
+        try:
+            search_query = f"{first_name} {last_name}".strip()
+            
+            response = await self.httpx_client.get(
+                f"{self.api_url}/api/v2/parties/search",
+                params={"q": search_query, "type": "person"}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                parties = data.get("parties", [])
+                
+                # Look for exact name match
+                for party_data in parties:
+                    party = party_data["party"]
+                    if (party.get("firstName", "").lower() == first_name.lower() and 
+                        party.get("lastName", "").lower() == last_name.lower()):
+                        return party["id"]
+                
+                # Return first result if no exact match
+                if parties:
+                    return parties[0]["party"]["id"]
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Name search error: {e}")
+            return None
+    
+    async def _update_person_tags(self, person_id: int, client: Client) -> Dict[str, Any]:
+        """Update person tags based on call outcome"""
+        
+        try:
+            # Determine which tag to add based on call outcome
+            latest_outcome = await client_repo.get_latest_call_outcome(client.id)
+            
+            if not latest_outcome:
+                return {"success": False, "error": "no_call_outcome"}
+            
+            # Map call outcome to CRM tag
+            tag_to_add = None
+            
+            if latest_outcome == CallOutcome.INTERESTED:
+                tag_to_add = self.tag_mappings[CRMTag.INTERESTED]
+            elif latest_outcome == CallOutcome.NOT_INTERESTED:
+                tag_to_add = self.tag_mappings[CRMTag.NOT_INTERESTED]
+            elif latest_outcome == CallOutcome.DNC_REQUESTED:
+                tag_to_add = self.tag_mappings[CRMTag.DNC_REQUESTED]
+            elif latest_outcome == CallOutcome.NO_ANSWER:
+                tag_to_add = self.tag_mappings[CRMTag.NO_CONTACT]
+            elif latest_outcome == CallOutcome.FAILED:
+                tag_to_add = self.tag_mappings[CRMTag.INVALID_NUMBER]
+            
+            if not tag_to_add:
+                return {"success": False, "error": "no_matching_tag"}
+            
+            # Add tag to person
+            tag_payload = {
+                "tag": {
+                    "name": tag_to_add,
+                    "description": f"Added by LYZR voice campaign on {datetime.utcnow().strftime('%Y-%m-%d')}"
+                }
+            }
+            
+            response = await self.httpx_client.post(
+                f"{self.api_url}/api/v2/parties/{person_id}/tags",
+                json=tag_payload
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"✅ Added tag '{tag_to_add}' to person {person_id}")
+                return {"success": True, "tag": tag_to_add}
+            else:
+                logger.error(f"❌ Failed to add tag: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"api_error_{response.status_code}"}
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating person tags: {e}")
             return {"success": False, "error": str(e)}
     
-    async def _send_agent_notification(
-        self,
-        agent: Dict[str, Any],
-        client: Client,
-        meeting_time: Optional[datetime],
-        call_summary: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Send notification email to agent about new assignment"""
+    async def _add_call_notes(self, person_id: int, client: Client) -> Dict[str, Any]:
+        """Add call notes to person record"""
         
-        # TODO: Implement actual SES email sending
-        # For now, just log what would be sent
+        try:
+            # Get call summary from latest call
+            call_summary = await client_repo.get_latest_call_summary(client.id)
+            
+            if not call_summary:
+                return {"success": False, "error": "no_call_summary"}
+            
+            # Create note content
+            note_content = self._format_call_notes(client, call_summary)
+            
+            # Add note to person
+            note_payload = {
+                "entry": {
+                    "type": "note",
+                    "content": note_content,
+                    "subject": f"LYZR Voice Campaign Call - {datetime.utcnow().strftime('%Y-%m-%d')}"
+                }
+            }
+            
+            response = await self.httpx_client.post(
+                f"{self.api_url}/api/v2/parties/{person_id}/entries",
+                json=note_payload
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"✅ Added call notes to person {person_id}")
+                return {"success": True}
+            else:
+                logger.error(f"❌ Failed to add notes: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"api_error_{response.status_code}"}
+                
+        except Exception as e:
+            logger.error(f"❌ Error adding call notes: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _format_call_notes(self, client: Client, call_summary: Dict[str, Any]) -> str:
+        """Format call notes for CRM"""
         
-        logger.info(f"📧 Would send agent notification to {agent['email']} about {client.client.full_name}")
+        notes = []
+        notes.append("=== LYZR VOICE CAMPAIGN CALL ===")
+        notes.append(f"Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        notes.append(f"Client: {client.client.full_name}")
+        notes.append(f"Phone: {client.client.phone}")
+        notes.append("")
+        
+        # Call outcome
+        outcome = call_summary.get("outcome", "Unknown")
+        notes.append(f"Call Outcome: {outcome}")
+        
+        # Call duration
+        duration = call_summary.get("duration_seconds", 0)
+        if duration > 0:
+            minutes = duration // 60
+            seconds = duration % 60
+            notes.append(f"Call Duration: {minutes}m {seconds}s")
+        
+        # Conversation summary
+        if call_summary.get("summary"):
+            notes.append("")
+            notes.append("Conversation Summary:")
+            notes.append(call_summary["summary"])
+        
+        # Key points
+        if call_summary.get("key_points"):
+            notes.append("")
+            notes.append("Key Points:")
+            for point in call_summary["key_points"]:
+                notes.append(f"- {point}")
+        
+        # Next actions
+        if call_summary.get("next_actions"):
+            notes.append("")
+            notes.append("Next Actions:")
+            for action in call_summary["next_actions"]:
+                notes.append(f"- {action}")
+        
+        # Agent assignment
+        if call_summary.get("agent_assigned"):
+            notes.append("")
+            notes.append(f"Assigned Agent: {call_summary['agent_assigned']}")
+        
+        notes.append("")
+        notes.append("Generated by LYZR Voice Agent System")
+        
+        return "\n".join(notes)
+    
+    async def _mock_crm_update(self, client: Client) -> Dict[str, Any]:
+        """Mock CRM update for development"""
+        
+        logger.info(f"🔧 Mock CRM update for {client.client.full_name}")
+        
+        # Simulate API delay
+        await asyncio.sleep(0.5)
+        
+        # Mark as updated in database
+        await client_repo.mark_crm_updated(client.id)
         
         return {
-            "success": False,
-            "message": "Email sending not implemented yet",
-            "would_send": {
-                "to": agent["email"],
-                "subject": f"New Lead Assigned - {client.client.full_name}",
-                "meeting_time": meeting_time.isoformat() if meeting_time else None
-            }
+            "success": True,
+            "person_id": "mock_person_123",
+            "tags_updated": True,
+            "notes_added": True,
+            "client_id": client.id,
+            "mock": True
         }
     
-    async def _send_client_confirmation(
-        self,
-        client: Client,
-        agent: Dict[str, Any],
-        meeting_time: datetime
-    ) -> Dict[str, Any]:
-        """Send meeting confirmation email to client"""
+    async def bulk_update_clients(self, clients: List[Client]) -> Dict[str, Any]:
+        """Bulk update multiple clients in CRM"""
         
-        logger.info(f"📧 Would send meeting confirmation to {client.client.email}")
-        
-        return {
-            "success": False,
-            "message": "Email sending not implemented yet",
-            "would_send": {
-                "to": client.client.email,
-                "subject": "Discovery Call Scheduled - Altrius Advisor Group",
-                "meeting_time": meeting_time.isoformat()
-            }
+        results = {
+            "total": len(clients),
+            "successful": 0,
+            "failed": 0,
+            "errors": []
         }
+        
+        for client in clients:
+            try:
+                result = await self.update_client_record(client)
+                
+                if result["success"]:
+                    results["successful"] += 1
+                else:
+                    results["failed"] += 1
+                    results["errors"].append({
+                        "client_id": client.id,
+                        "error": result.get("error", "unknown")
+                    })
+                    
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({
+                    "client_id": client.id,
+                    "error": str(e)
+                })
+        
+        logger.info(f"✅ Bulk CRM update completed: {results['successful']}/{results['total']} successful")
+        
+        return results
     
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get CRM integration statistics"""
-        return {
-            "crm_updates": self.crm_updates,
-            "agent_assignments": self.agent_assignments,
-            "meetings_scheduled": self.meetings_scheduled,
-            "agents_configured": len(self.agents),
-            "capsule_configured": bool(settings.capsule_api_key and not settings.capsule_api_key.startswith("your_")),
-            "google_calendar_configured": self._is_google_calendar_configured()
-        }
+    async def add_custom_tag(self, client: Client, tag_name: str, description: str = "") -> Dict[str, Any]:
+        """Add custom tag to client"""
+        
+        try:
+            if not self.api_token:
+                logger.info(f"🔧 Mock adding custom tag '{tag_name}' to {client.client.full_name}")
+                return {"success": True, "mock": True}
+            
+            person_id = await self._find_person(client)
+            
+            if not person_id:
+                return {"success": False, "error": "person_not_found"}
+            
+            tag_payload = {
+                "tag": {
+                    "name": tag_name,
+                    "description": description or f"Custom tag added on {datetime.utcnow().strftime('%Y-%m-%d')}"
+                }
+            }
+            
+            response = await self.httpx_client.post(
+                f"{self.api_url}/api/v2/parties/{person_id}/tags",
+                json=tag_payload
+            )
+            
+            if response.status_code in [200, 201]:
+                return {"success": True, "tag": tag_name}
+            else:
+                return {"success": False, "error": f"api_error_{response.status_code}"}
+                
+        except Exception as e:
+            logger.error(f"❌ Error adding custom tag: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_client_tags(self, client: Client) -> List[str]:
+        """Get existing tags for client"""
+        
+        try:
+            if not self.api_token:
+                return ["MOCK-TAG-1", "MOCK-TAG-2"]  # Mock tags for development
+            
+            person_id = await self._find_person(client)
+            
+            if not person_id:
+                return []
+            
+            response = await self.httpx_client.get(
+                f"{self.api_url}/api/v2/parties/{person_id}/tags"
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                tags = data.get("tags", [])
+                return [tag["tag"]["name"] for tag in tags]
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting client tags: {e}")
+            return []
+    
+    async def close(self):
+        """Close HTTP client"""
+        await self.httpx_client.aclose()
+        logger.info("✅ CRM integration client closed")
