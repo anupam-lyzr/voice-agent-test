@@ -1,49 +1,59 @@
 {
   "agents": [
     {
-      "id": "agent_1",
-      "name": "Sarah Johnson",
-      "email": "sarah@altruisadvisor.com",
-      "googleCalendarId": "sarah@altruisadvisor.com",
+      "id": "anthony_fracchia",
+      "name": "Anthony Fracchia",
+      "email": "anthony@altruisadvisor.com",
+      "google_calendar_id": "anthony@altruisadvisor.com",
       "timezone": "America/New_York",
-      "workingHours": "9AM-5PM",
-      "specialties": ["health", "family"]
+      "working_hours": "9AM-5PM",
+      "specialties": ["health", "medicare"],
+      "tag_identifier": "AB - Anthony Fracchia",
+      "client_count": 1861
     },
     {
-      "id": "agent_2", 
-      "name": "Michael Chen",
-      "email": "michael@altruisadvisor.com",
-      "googleCalendarId": "michael@altruisadvisor.com",
+      "id": "lashawn_boyd",
+      "name": "LaShawn Boyd",
+      "email": "lashawn@altruisadvisor.com",
+      "google_calendar_id": "lashawn@altruisadvisor.com",
       "timezone": "America/New_York",
-      "workingHours": "9AM-5PM",
-      "specialties": ["auto", "home"]
+      "working_hours": "9AM-5PM",
+      "specialties": ["auto", "life"],
+      "tag_identifier": "AB - LaShawn Boyd",
+      "client_count": 822
     },
     {
-      "id": "agent_3",
-      "name": "Emily Rodriguez",
-      "email": "emily@altruisadvisor.com", 
-      "googleCalendarId": "emily@altruisadvisor.com",
+      "id": "india_watson",
+      "name": "India Watson",
+      "email": "india@altruisadvisor.com",
+      "google_calendar_id": "india@altruisadvisor.com",
       "timezone": "America/New_York",
-      "workingHours": "9AM-5PM",
-      "specialties": ["life", "disability"]
+      "working_hours": "9AM-5PM",
+      "specialties": ["health", "dental"],
+      "tag_identifier": "AB - India Watson",
+      "client_count": 770
     },
     {
-      "id": "agent_4",
-      "name": "James Thompson",
-      "email": "james@altruisadvisor.com",
-      "googleCalendarId": "james@altruisadvisor.com", 
+      "id": "hineth_pettway",
+      "name": "Hineth Pettway",
+      "email": "hineth@altruisadvisor.com",
+      "google_calendar_id": "hineth@altruisadvisor.com",
       "timezone": "America/New_York",
-      "workingHours": "9AM-5PM",
-      "specialties": ["business", "commercial"]
+      "working_hours": "9AM-5PM",
+      "specialties": ["medicare", "supplements"],
+      "tag_identifier": "AB - Hineth Pettway",
+      "client_count": 649
     },
     {
-      "id": "agent_5",
-      "name": "Amanda Foster",
-      "email": "amanda@altruisadvisor.com",
-      "googleCalendarId": "amanda@altruisadvisor.com",
-      "timezone": "America/New_York", 
-      "workingHours": "9AM-5PM",
-      "specialties": ["medicare", "senior"]
+      "id": "keith_braswell",
+      "name": "Keith Braswell",
+      "email": "keith@altruisadvisor.com",
+      "google_calendar_id": "keith@altruisadvisor.com",
+      "timezone": "America/New_York",
+      "working_hours": "9AM-5PM",
+      "specialties": ["vision", "dental"],
+      "tag_identifier": "AB - Keith Braswell",
+      "client_count": 907
     }
   ]
 }

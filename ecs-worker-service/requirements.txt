@@ -1,32 +1,8 @@
-# Core Framework
-asyncio
 pydantic==2.4.2
 pydantic-settings==2.0.3
-
-# HTTP Client
-httpx==0.25.2
-requests==2.31.0
-
-# Database
-pymongo==4.6.0
-motor==3.3.2
-
-# Redis
-redis==5.0.1
-aioredis==2.0.1
-
-# AWS Services
-boto3==1.29.7
-
-# Twilio
-twilio==9.0.4
-
-# Utilities
 python-dotenv==1.0.0
-orjson==3.9.10
+asyncio
 
-# Date/Time
-pytz==2023.3
-
-# Email
-email-validator==2.1.0
+# Data Processing  
+pandas==2.0.3
+openpyxl==3.1.2

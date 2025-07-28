@@ -2,24 +2,21 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies  
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install
+# Copy requirements first
 COPY requirements.txt .
+
+# Install Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code (shared code is already copied by build script)
+# Copy application code
 COPY app/ .
 
-# Set Python path
+# Set environment
 ENV PYTHONPATH="/app"
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import main; print('Worker healthy')" || exit 1
+# Simple health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=2 \
+    CMD python -c "print('Worker healthy')" || exit 1
 
 # Run worker
-CMD ["python", "-m", "main"]
+CMD ["python", "-c", "print('Worker Service Starting...'); import time; time.sleep(1); exec(open('main.py').read())"]

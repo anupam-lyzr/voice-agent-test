@@ -1,7 +1,5 @@
-# version: '3.8'
-
 services:
-  # MongoDB (DocumentDB alternative for local development)
+  # MongoDB for local development
   mongodb:
     image: mongo:6.0
     container_name: voice-agent-mongodb
@@ -15,8 +13,9 @@ services:
       - mongodb_data:/data/db
     networks:
       - voice-agent-network
+    restart: unless-stopped
 
-  # Redis for session caching
+  # Redis for caching
   redis:
     image: redis:7-alpine
     container_name: voice-agent-redis
@@ -27,10 +26,13 @@ services:
       - redis_data:/data
     networks:
       - voice-agent-network
+    restart: unless-stopped
 
-  # ECS API Service (Twilio webhooks)
+  # API Service (minimal for now)
   api-service:
-    build: ./ecs-api-service
+    build: 
+      context: ./ecs-api-service
+      dockerfile: Dockerfile
     container_name: voice-agent-api
     ports:
       - "8000:8000"
@@ -47,9 +49,11 @@ services:
       - voice-agent-network
     restart: unless-stopped
 
-  # ECS Worker Service (Campaign processing)
+  # Worker Service (minimal for now)
   worker-service:
-    build: ./ecs-worker-service
+    build:
+      context: ./ecs-worker-service
+      dockerfile: Dockerfile
     container_name: voice-agent-worker
     env_file:
       - .env
