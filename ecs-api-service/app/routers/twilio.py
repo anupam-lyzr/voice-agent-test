@@ -1,6 +1,6 @@
 """
-Twilio Webhook Router - Updated with TwiML Helpers
-Handles all Twilio webhook endpoints for voice processing
+Twilio Router - Updated to Use Existing Services
+Handles Twilio webhooks using optimized existing services
 """
 
 from fastapi import APIRouter, Request, Form, WebSocket, WebSocketDisconnect
@@ -11,15 +11,20 @@ import json
 import uuid
 from datetime import datetime
 
+# Import shared models and utilities
 from shared.config.settings import settings
-from shared.models.call_session import CallSession, CallStatus, ConversationStage, ConversationTurn, ResponseType
+from shared.models.call_session import CallSession, CallStatus, ConversationStage
 from shared.models.client import Client, CallOutcome
 from shared.utils.database import client_repo, get_client_by_phone
 from shared.utils.redis_client import cache_session, get_cached_session
 
-from services.hybrid_tts import HybridTTSService
-from services.voice_processor import VoiceProcessor, update_client_record
-from services.twiml_helpers import (
+# Import existing optimized services
+from ..services.voice_processor import VoiceProcessor, update_client_record
+from ..services.hybrid_tts import HybridTTSService
+from ..services.lyzr_client import get_lyzr_client
+from ..services.elevenlabs_client import get_elevenlabs_client
+from ..services.deepgram_client import get_deepgram_client
+from ..services.twiml_helpers import (
     create_simple_twiml,
     create_voice_twiml,
     create_fallback_twiml,
@@ -28,11 +33,14 @@ from services.twiml_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/twilio", tags=["Twilio Webhooks"])
+router = APIRouter(prefix="/twilio", tags=["Twilio"])
 
-# Global services
-hybrid_tts = HybridTTSService()
+# Initialize services using existing optimized implementations
 voice_processor = VoiceProcessor()
+hybrid_tts = HybridTTSService()
+
+# Store active conversation states (using existing pattern)
+active_sessions: Dict[str, CallSession] = {}
 
 @router.post("/voice")
 async def voice_webhook(
@@ -43,15 +51,13 @@ async def voice_webhook(
     To: Optional[str] = Form(None),
     Direction: Optional[str] = Form(None)
 ):
-    """Handle incoming voice calls and initiate conversation"""
+    """Handle incoming voice calls using existing voice processor"""
     
     logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From}")
     
     try:
         if CallStatus == "in-progress":
-            # Call answered - start conversation
-            
-            # Get client by phone number
+            # Get client using existing database utilities
             client = await get_client_by_phone(From)
             if not client:
                 logger.warning(f"⚠️ Client not found for phone: {From}")
@@ -60,11 +66,11 @@ async def voice_webhook(
                     media_type="application/xml"
                 )
             
-            # Create call session
+            # Create session using existing models
             session = CallSession(
                 session_id=str(uuid.uuid4()),
                 twilio_call_sid=CallSid,
-                client_id=client.id,
+                client_id=str(client.id),
                 phone_number=From,
                 lyzr_agent_id=settings.lyzr_conversation_agent_id,
                 lyzr_session_id=f"{CallSid}-{uuid.uuid4().hex[:8]}"
@@ -72,182 +78,150 @@ async def voice_webhook(
             session.call_status = CallStatus.IN_PROGRESS
             session.answered_at = datetime.utcnow()
             
-            # Cache session
+            # Cache session using existing utilities
             await cache_session(session)
+            active_sessions[CallSid] = session
             
             logger.info(f"🎯 Starting conversation with {client.client.full_name}")
             
-            # Generate greeting with client's name
+            # Generate greeting using existing hybrid TTS
             greeting_text = f"Hello {client.client.first_name}, this is Alex from Altrius Advisor Group. It's been some time since you've been in touch with us. We'd love to improve our service for you during Open Enrollment. Can we help service you this year?"
             
-            # Get greeting audio (static or dynamic)
-            audio_result = await hybrid_tts.get_response_audio(
+            # Use existing TTS service for optimized greeting
+            tts_response = await hybrid_tts.get_response_audio(
                 text=greeting_text,
                 response_type="greeting",
-                client_data={
-                    "client_name": client.client.full_name,
-                    "first_name": client.client.first_name
-                }
+                context={"client_name": client.client.first_name}
             )
             
-            # Create TwiML response
-            if audio_result["success"]:
-                twiml = create_voice_twiml(
-                    audio_url=audio_result["audio_url"],
-                    gather_action=settings.get_webhook_url("speech"),
-                    session_id=session.session_id
+            if tts_response.get("success"):
+                # Create TwiML with optimized audio
+                return Response(
+                    content=create_voice_twiml(
+                        greeting_text,
+                        gather_action="/twilio/process-speech",
+                        audio_url=tts_response.get("audio_url")
+                    ),
+                    media_type="application/xml"
                 )
-                
-                # Log first turn
-                turn = ConversationTurn(
-                    turn_number=1,
-                    agent_response=greeting_text,
-                    response_type=ResponseType.STATIC_AUDIO if audio_result["type"] == "static" else ResponseType.DYNAMIC_TTS,
-                    audio_url=audio_result["audio_url"],
-                    conversation_stage=ConversationStage.GREETING,
-                    response_generation_time_ms=audio_result.get("generation_time_ms", 0)
-                )
-                session.add_conversation_turn(turn)
-                session.update_conversation_stage(ConversationStage.INTEREST_CHECK)
-                
-                # Update cache
-                await cache_session(session)
-                
             else:
-                # Fallback to Twilio TTS
-                twiml = create_fallback_twiml(greeting_text, settings.get_webhook_url("speech"))
-            
-            return Response(content=twiml, media_type="application/xml")
+                # Fallback to basic TwiML
+                return Response(
+                    content=create_voice_twiml(greeting_text, "/twilio/process-speech"),
+                    media_type="application/xml"
+                )
         
-        elif CallStatus == "ringing":
-            # Call is ringing, return empty response
-            return Response(content="<Response></Response>", media_type="application/xml")
+        # Handle other call statuses
+        return Response(
+            content=create_simple_twiml("Call received."),
+            media_type="application/xml"
+        )
         
-        else:
-            # Other call statuses (completed, failed, etc.)
-            return Response(content="<Response></Response>", media_type="application/xml")
-            
     except Exception as e:
         logger.error(f"❌ Voice webhook error: {e}")
         return Response(
-            content=create_simple_twiml("Sorry, there was an error. Please call back later."),
+            content=create_fallback_twiml("We are experiencing technical difficulties."),
             media_type="application/xml"
         )
 
-@router.post("/speech")
-async def speech_webhook(
+@router.post("/process-speech")
+async def process_speech_webhook(
     request: Request,
     CallSid: str = Form(...),
     SpeechResult: Optional[str] = Form(None),
-    From: Optional[str] = Form(None),
-    Digits: Optional[str] = Form(None)
+    Confidence: Optional[float] = Form(None)
 ):
-    """Process customer speech and generate response"""
+    """Process customer speech using existing voice processor"""
     
-    logger.info(f"🗣️ Speech webhook: {CallSid} - Speech: '{SpeechResult}' - Digits: '{Digits}'")
+    logger.info(f"🎤 Processing speech: {CallSid} - Result: {SpeechResult} - Confidence: {Confidence}")
     
     try:
-        # Get session from cache
-        session = await get_cached_session(CallSid)
+        # Get session
+        session = active_sessions.get(CallSid)
+        if not session:
+            # Try to get from cache
+            session = await get_cached_session(CallSid)
+            if session:
+                active_sessions[CallSid] = session
+        
         if not session:
             logger.error(f"❌ Session not found: {CallSid}")
             return Response(
-                content=create_simple_twiml("Thank you for calling. Goodbye."),
+                content=create_simple_twiml("Session expired. Please call back."),
                 media_type="application/xml"
             )
         
-        # Use speech result or digits
-        customer_input = SpeechResult or Digits or ""
+        # Process speech using existing voice processor
+        customer_input = SpeechResult or "no response"
         
-        if not customer_input.strip():
-            # No input received
-            return Response(
-                content=create_simple_twiml("I didn't hear you. Thank you for your time. Goodbye."),
-                media_type="application/xml"
-            )
-        
-        # Process speech with voice processor
-        response_result = await voice_processor.process_customer_speech(
+        # Use existing voice processor for AI response
+        ai_response = await voice_processor.process_customer_input(
+            customer_input=customer_input,
             session=session,
-            customer_speech=customer_input,
-            client_phone=From
+            confidence=Confidence or 0.0
         )
         
-        if not response_result["success"]:
-            # Error in processing - end call gracefully
+        if not ai_response.get("success"):
+            logger.error(f"❌ Voice processing failed: {ai_response.get('error')}")
             return Response(
-                content=create_simple_twiml(response_result.get("message", "Thank you for your time.")),
+                content=create_simple_twiml("Thank you for your time. Have a great day!"),
                 media_type="application/xml"
             )
         
-        # Get audio for response
-        audio_result = await hybrid_tts.get_response_audio(
-            text=response_result["response_text"],
-            response_type=response_result["response_category"],
-            conversation_context=session.conversation_context
+        response_text = ai_response.get("response_text", "Thank you for your call.")
+        call_outcome = ai_response.get("outcome", "unknown")
+        
+        # Update session with conversation turn
+        session.add_conversation_turn(
+            customer_input=customer_input,
+            agent_response=response_text,
+            confidence=Confidence or 0.0
         )
         
-        # Create conversation turn
-        turn = ConversationTurn(
-            turn_number=len(session.conversation_turns) + 1,
-            agent_response=response_result["response_text"],
-            customer_speech=customer_input,
-            response_type=ResponseType.STATIC_AUDIO if audio_result.get("type") == "static" else ResponseType.DYNAMIC_TTS,
-            audio_url=audio_result["audio_url"] if audio_result["success"] else None,
-            conversation_stage=session.conversation_stage,
-            customer_intent=response_result.get("detected_intent"),
-            response_generation_time_ms=response_result.get("generation_time_ms", 0),
-            tts_generation_time_ms=audio_result.get("generation_time_ms", 0)
+        # Use hybrid TTS for optimized response
+        response_type = "interested" if call_outcome == "interested" else "general"
+        tts_response = await hybrid_tts.get_response_audio(
+            text=response_text,
+            response_type=response_type,
+            context={"outcome": call_outcome}
         )
         
-        session.add_conversation_turn(turn)
+        # Determine if call should end
+        should_end_call = call_outcome in ["interested", "not_interested", "dnc_requested"]
         
-        # Update session based on response
-        if response_result.get("end_conversation"):
-            session.complete_call(response_result.get("final_outcome", "completed"))
+        if should_end_call:
+            # End call with final message
+            session.complete_call(call_outcome)
+            await cache_session(session)
             
-            # Create final TwiML (no gather)
-            if audio_result["success"]:
-                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Play>{audio_result["audio_url"]}</Play>
-</Response>"""
-            else:
-                twiml = create_simple_twiml(response_result["response_text"])
-        
+            # Update client record using existing utilities
+            await update_client_record(session, call_outcome)
+            
+            # Clean up session
+            if CallSid in active_sessions:
+                del active_sessions[CallSid]
+            
+            return Response(
+                content=create_hangup_twiml(response_text, tts_response.get("audio_url")),
+                media_type="application/xml"
+            )
         else:
             # Continue conversation
-            if response_result.get("conversation_stage"):
-                session.update_conversation_stage(
-                    ConversationStage(response_result["conversation_stage"])
-                )
+            await cache_session(session)
             
-            # Create continuing TwiML
-            if audio_result["success"]:
-                twiml = create_voice_twiml(
-                    audio_url=audio_result["audio_url"],
-                    gather_action=settings.get_webhook_url("speech"),
-                    session_id=session.session_id
-                )
-            else:
-                twiml = create_fallback_twiml(
-                    response_result["response_text"],
-                    settings.get_webhook_url("speech")
-                )
-        
-        # Update session cache
-        await cache_session(session)
-        
-        # Update client record if conversation completed
-        if response_result.get("end_conversation"):
-            await update_client_record(session, response_result)
-        
-        return Response(content=twiml, media_type="application/xml")
+            return Response(
+                content=create_voice_twiml(
+                    response_text,
+                    "/twilio/process-speech",
+                    tts_response.get("audio_url")
+                ),
+                media_type="application/xml"
+            )
         
     except Exception as e:
         logger.error(f"❌ Speech processing error: {e}")
         return Response(
-            content=create_simple_twiml("Thank you for your time."),
+            content=create_simple_twiml("Thank you for your call. Our team will contact you soon."),
             media_type="application/xml"
         )
 
@@ -259,28 +233,52 @@ async def status_webhook(
     CallDuration: Optional[str] = Form(None),
     RecordingUrl: Optional[str] = Form(None)
 ):
-    """Handle call status updates from Twilio"""
+    """Handle call status updates using existing session management"""
     
-    logger.info(f"📊 Status webhook: {CallSid} - Status: {CallStatus} - Duration: {CallDuration}")
+    logger.info(f"📊 Status update: {CallSid} - Status: {CallStatus} - Duration: {CallDuration}")
     
     try:
-        session = await get_cached_session(CallSid)
-        if session:
-            if CallStatus in ["completed", "failed", "busy", "no-answer"]:
-                # Update session with final status
-                if not session.completed_at:  # Only update if not already completed
-                    session.call_status = CallStatus(CallStatus.lower().replace("-", "_"))
-                    session.complete_call(CallStatus)
-                    
-                    if CallDuration:
-                        session.session_metrics.total_call_duration_seconds = int(CallDuration)
-                    
-                    if RecordingUrl:
-                        session.recording_url = RecordingUrl
-                    
-                    await cache_session(session)
-                    
-                    logger.info(f"✅ Call completed: {CallSid} - Duration: {CallDuration}s")
+        # Get session from cache or active sessions
+        session = active_sessions.get(CallSid)
+        if not session:
+            session = await get_cached_session(CallSid)
+        
+        if session and CallStatus in ["completed", "failed", "busy", "no-answer"]:
+            # Update session with final status
+            if not session.completed_at:  # Only update if not already completed
+                session.call_status = CallStatus(CallStatus.lower().replace("-", "_"))
+                session.complete_call(CallStatus)
+                
+                if CallDuration:
+                    session.session_metrics.total_call_duration_seconds = int(CallDuration)
+                
+                if RecordingUrl:
+                    session.recording_url = RecordingUrl
+                
+                # Save final session state
+                await cache_session(session)
+                
+                # Generate call summary using existing services
+                if session.conversation_history:
+                    try:
+                        # Use existing LYZR client for summary
+                        lyzr_client = await get_lyzr_client()
+                        summary = await lyzr_client.generate_call_summary(
+                            session.get_conversation_transcript(),
+                            session.get_context_for_summary()
+                        )
+                        
+                        if summary.get("success"):
+                            logger.info(f"✅ Call summary generated: {CallSid}")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Summary generation failed: {e}")
+                
+                # Clean up active session
+                if CallSid in active_sessions:
+                    del active_sessions[CallSid]
+                
+                logger.info(f"✅ Call completed: {CallSid} - Duration: {CallDuration}s")
         
         return {"status": "ok", "call_sid": CallSid}
         
@@ -290,12 +288,16 @@ async def status_webhook(
 
 @router.websocket("/media-stream/{session_id}")
 async def media_stream_websocket(websocket: WebSocket, session_id: str):
-    """Handle Twilio Media Streams for real-time audio processing"""
+    """Handle Twilio Media Streams using existing audio processor"""
     
     await websocket.accept()
     logger.info(f"🔌 Media stream connected: {session_id}")
     
     try:
+        # Import existing audio processor
+        from ..core.audio_processor import AudioProcessor
+        audio_processor = AudioProcessor()
+        
         while True:
             data = await websocket.receive_text()
             
@@ -304,83 +306,104 @@ async def media_stream_websocket(websocket: WebSocket, session_id: str):
                 event = message.get("event")
                 
                 if event == "connected":
-                    logger.info(f"📡 Media stream connected for {session_id}")
+                    logger.info(f"📡 Media stream started: {session_id}")
                     await websocket.send_text(json.dumps({
                         "event": "connected",
                         "session_id": session_id
                     }))
                 
                 elif event == "start":
-                    logger.info(f"🎙️ Media stream started for {session_id}")
+                    logger.info(f"🎙️ Audio capture started: {session_id}")
                     
                 elif event == "media":
-                    # Handle incoming audio data
+                    # Process audio using existing audio processor
                     media_data = message.get("media", {})
-                    payload = media_data.get("payload")
+                    audio_data = media_data.get("payload", "")
                     
-                    if payload:
-                        # Process audio payload (base64 encoded audio)
-                        # This would integrate with real-time STT
-                        pass
+                    if audio_data:
+                        # Use existing optimized audio processing
+                        result = await audio_processor.process_audio(
+                            session_id=session_id,
+                            audio_data=audio_data,
+                            audio_format="mulaw"
+                        )
+                        
+                        if result.get("response_audio"):
+                            # Send audio response back to Twilio
+                            await websocket.send_text(json.dumps({
+                                "event": "media",
+                                "media": {
+                                    "payload": result["response_audio"]
+                                }
+                            }))
                 
                 elif event == "stop":
-                    logger.info(f"🛑 Media stream stopped for {session_id}")
+                    logger.info(f"🛑 Media stream stopped: {session_id}")
                     break
                     
             except json.JSONDecodeError:
-                logger.error(f"Invalid JSON in media stream: {data[:100]}...")
+                logger.error(f"❌ Invalid JSON in media stream: {session_id}")
+            except Exception as e:
+                logger.error(f"❌ Media stream processing error: {e}")
                 
     except WebSocketDisconnect:
         logger.info(f"🔌 Media stream disconnected: {session_id}")
-    
     except Exception as e:
         logger.error(f"❌ Media stream error: {e}")
-        await websocket.close()
 
-# Additional testing endpoints
-@router.post("/test")
-async def test_webhook(request: Request):
-    """Test webhook endpoint for development"""
+@router.get("/test-connection")
+async def test_twilio_connection():
+    """Test Twilio connection and existing services"""
     
     try:
-        form_data = await request.form()
+        # Test existing service configurations
+        services_status = {
+            "twilio_configured": bool(settings.twilio_account_sid and settings.twilio_auth_token),
+            "lyzr_configured": bool(settings.lyzr_user_api_key),
+            "elevenlabs_configured": bool(settings.elevenlabs_api_key),
+            "deepgram_configured": bool(settings.deepgram_api_key),
+            "hybrid_tts_ready": await hybrid_tts.is_ready(),
+            "voice_processor_ready": voice_processor.is_ready()
+        }
         
-        logger.info(f"🧪 Test webhook called with: {dict(form_data)}")
+        # Test service connections
+        service_tests = {}
         
-        return Response(
-            content=create_simple_twiml("Test webhook received successfully!"),
-            media_type="application/xml"
-        )
+        try:
+            lyzr_client = await get_lyzr_client()
+            service_tests["lyzr"] = lyzr_client.is_configured()
+        except Exception as e:
+            service_tests["lyzr"] = f"Error: {str(e)}"
         
-    except Exception as e:
-        logger.error(f"❌ Test webhook error: {e}")
-        return Response(
-            content=create_simple_twiml("Test webhook failed."),
-            media_type="application/xml"
-        )
-
-@router.get("/test-tts")
-async def test_tts(text: str = "Hello, this is a test of our voice system."):
-    """Test TTS generation"""
-    
-    try:
-        audio_result = await hybrid_tts.get_response_audio(
-            text=text,
-            response_type="test",
-            client_data={"client_name": "Test User"}
-        )
+        try:
+            elevenlabs_client = await get_elevenlabs_client()
+            service_tests["elevenlabs"] = elevenlabs_client.is_configured()
+        except Exception as e:
+            service_tests["elevenlabs"] = f"Error: {str(e)}"
+        
+        try:
+            deepgram_client = await get_deepgram_client()
+            service_tests["deepgram"] = deepgram_client.is_configured()
+        except Exception as e:
+            service_tests["deepgram"] = f"Error: {str(e)}"
         
         return {
-            "success": audio_result["success"],
-            "audio_url": audio_result.get("audio_url"),
-            "type": audio_result.get("type"),
-            "generation_time_ms": audio_result.get("generation_time_ms"),
-            "text": text
+            "status": "ok",
+            "configuration": services_status,
+            "service_tests": service_tests,
+            "active_sessions": len(active_sessions),
+            "webhook_urls": {
+                "voice": f"{settings.base_url}/twilio/voice",
+                "status": f"{settings.base_url}/twilio/status",
+                "media_stream": f"{settings.base_url}/twilio/media-stream"
+            },
+            "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"❌ TTS test error: {e}")
+        logger.error(f"❌ Connection test error: {e}")
         return {
-            "success": False,
-            "error": str(e)
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
         }

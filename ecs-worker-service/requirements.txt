@@ -1,8 +1,23 @@
 pydantic==2.4.2
 pydantic-settings==2.0.3
 python-dotenv==1.0.0
-asyncio
 
-# Data Processing  
-pandas==2.0.3
-openpyxl==3.1.2
+# Database & Cache
+motor==3.3.2
+pymongo==4.6.0
+redis==5.0.1
+
+# External APIs
+httpx==0.25.2
+twilio==9.0.4
+boto3==1.29.7
+
+# Email & CRM
+email-validator==2.1.0
+google-api-python-client==2.95.0
+google-auth==2.22.0
+
+# Utilities
+orjson==3.9.10
+pytz==2023.3
+aiofiles==23.2.0
