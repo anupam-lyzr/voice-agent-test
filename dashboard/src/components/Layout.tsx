@@ -1,158 +1,168 @@
-import { useState } from 'react'
-import type { ReactNode } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { Button } from './ui/button'
-import { Badge } from './ui/badge'
-import { 
-  Phone, 
-  BarChart3, 
-  TestTube, 
+import { useState } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
+import { ScrollArea } from "./ui/scroll-area";
+import { Badge } from "./ui/badge";
+import {
+  LayoutDashboard,
+  Phone,
+  Users,
+  BarChart3,
+  Settings,
+  TestTube,
+  PlayCircle,
+  PauseCircle,
+  Activity,
+  Database,
+  Headphones,
   Menu,
-  X
-} from 'lucide-react'
+  X,
+} from "lucide-react";
 
-import  type { LucideIcon } from 'lucide-react'
 interface LayoutProps {
-  children: ReactNode
+  children: React.ReactNode;
 }
 
-interface NavigationItem {
-  name: string
-  href: string
-  icon: LucideIcon
-}
+const navigation = [
+  { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Testing", href: "/testing", icon: TestTube },
+  { name: "Campaign", href: "/campaign", icon: Phone },
+  { name: "Clients", href: "/clients", icon: Users },
+  { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Settings", href: "/settings", icon: Settings },
+];
 
 export default function Layout({ children }: LayoutProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [productionMode, setProductionMode] = useState(false)
-  const location = useLocation()
-
-  const navigation: NavigationItem[] = [
-    { name: 'Dashboard', href: '/', icon: BarChart3 },
-    { name: 'Testing', href: '/testing', icon: TestTube },
-  ]
-
-  const isActive = (href: string): boolean => location.pathname === href
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Mobile sidebar backdrop */}
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      {/* Mobile sidebar overlay */}
       {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+        <div
+          className="fixed inset-0 z-40 bg-black bg-opacity-25 lg:hidden"
           onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
         />
       )}
 
       {/* Sidebar */}
-      <div className={`
-        fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-lg transform transition-transform duration-300 ease-in-out
-        lg:translate-x-0 lg:static lg:inset-0
-        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-      `}>
-        <div className="flex items-center justify-between h-16 px-6 border-b">
-          <div className="flex items-center space-x-2">
-            <Phone className="h-8 w-8 text-blue-600" />
-            <span className="text-xl font-bold">Voice Agent</span>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSidebarOpen(false)}
-            className="lg:hidden"
-          >
-            <X className="h-6 w-6" />
-          </Button>
-        </div>
-
-        {/* Production Mode Toggle */}
-        <div className="p-4 border-b">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Mode</span>
+      <div
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 transform transition-transform duration-300 ease-in-out lg:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <div className="flex flex-col h-full">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                <Headphones className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-gray-900 dark:text-white">
+                  Voice Agent
+                </h1>
+              </div>
+            </div>
             <Button
-              variant={productionMode ? "destructive" : "outline"}
-              size="sm"
-              onClick={() => setProductionMode(!productionMode)}
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              onClick={() => setSidebarOpen(false)}
             >
-              {productionMode ? 'PRODUCTION' : 'TESTING'}
+              <X className="h-5 w-5" />
             </Button>
           </div>
-          <div className="mt-2">
-            <Badge variant={productionMode ? "destructive" : "secondary"}>
-              {productionMode ? '🔴 LIVE CALLS' : '🧪 TEST MODE'}
-            </Badge>
-          </div>
-        </div>
 
-        {/* Navigation */}
-        <nav className="mt-6 px-4">
-          <ul className="space-y-2">
-            {navigation.map((item) => {
-              const Icon = item.icon
-              return (
-                <li key={item.name}>
+          {/* Navigation */}
+          <ScrollArea className="flex-1 px-4 py-4">
+            <nav className="space-y-1">
+              {navigation.map((item) => {
+                const isActive = location.pathname === item.href;
+                return (
                   <Link
+                    key={item.name}
                     to={item.href}
-                    className={`
-                      flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors
-                      ${isActive(item.href) 
-                        ? 'bg-blue-100 text-blue-700' 
-                        : 'text-gray-700 hover:bg-gray-100'
-                      }
-                    `}
                     onClick={() => setSidebarOpen(false)}
+                    className={cn(
+                      "group flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors",
+                      isActive
+                        ? "bg-blue-50 text-blue-700 dark:bg-blue-900/50 dark:text-white"
+                        : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
+                    )}
                   >
-                    <Icon className="h-5 w-5" />
-                    <span>{item.name}</span>
+                    <item.icon
+                      className={cn(
+                        "mr-3 h-5 w-5 flex-shrink-0",
+                        isActive
+                          ? "text-blue-600 dark:text-white"
+                          : "text-gray-400 dark:text-gray-500 group-hover:text-gray-500 dark:group-hover:text-gray-400"
+                      )}
+                    />
+                    {item.name}
                   </Link>
-                </li>
-              )
-            })}
-          </ul>
-        </nav>
+                );
+              })}
+            </nav>
+          </ScrollArea>
 
-        {/* System Status */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-600">System Status</span>
-            <Badge variant="outline" className="text-green-600">
-              ● Online
-            </Badge>
+          {/* Campaign Controls */}
+          <div className="p-4 border-t border-gray-200 dark:border-gray-800">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  System Status
+                </span>
+                <div className="flex items-center space-x-1.5">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span className="text-xs text-green-600 font-medium">
+                    ONLINE
+                  </span>
+                </div>
+              </div>
+              <div className="flex space-x-2">
+                <Button size="sm" className="flex-1">
+                  <PlayCircle className="h-4 w-4 mr-2" />
+                  Start
+                </Button>
+                <Button size="sm" variant="outline" className="flex-1">
+                  <PauseCircle className="h-4 w-4 mr-2" />
+                  Pause
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Main content */}
       <div className="lg:pl-64">
-        {/* Top bar */}
-        <div className="sticky top-0 z-30 bg-white border-b px-6 py-4">
+        {/* Top bar for mobile */}
+        <div className="sticky top-0 z-10 lg:hidden bg-white/80 dark:bg-gray-950/80 backdrop-blur-sm border-b border-gray-200 dark:border-gray-800 px-4 py-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setSidebarOpen(true)}
-                className="lg:hidden"
-              >
-                <Menu className="h-6 w-6" />
-              </Button>
-              <h1 className="text-2xl font-bold text-gray-900">
-                Voice Agent Dashboard
-              </h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              <Badge variant={productionMode ? "destructive" : "secondary"}>
-                {productionMode ? 'PRODUCTION MODE' : 'TEST MODE'}
-              </Badge>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="flex items-center space-x-2">
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                System Online
+              </span>
             </div>
           </div>
         </div>
 
         {/* Page content */}
-        <main className="p-6">
-          {children}
-        </main>
+        <main className="p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
-  )
+  );
 }

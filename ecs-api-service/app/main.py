@@ -21,7 +21,7 @@ from shared.utils.redis_client import init_redis, close_redis, redis_client
 
 # Import routers
 from routers.twilio import router as twilio_router
-
+from routers.dashboard import router as dashboard_router
 # Configure logging
 logging.basicConfig(
     level=logging.INFO if settings.debug else logging.WARNING,
@@ -128,8 +128,9 @@ static_dir = os.path.join(os.getcwd(), "static", "audio")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=os.path.dirname(static_dir)), name="static")
 
-# Include routers - THIS WAS MISSING
+# Include routers
 app.include_router(twilio_router)
+app.include_router(dashboard_router)
 
 @app.get("/")
 async def root():

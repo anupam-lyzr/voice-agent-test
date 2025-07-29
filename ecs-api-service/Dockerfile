@@ -25,4 +25,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=2 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run with basic uvicorn
-CMD ["python", "-c", "print('API Service Starting...'); import time; time.sleep(1); exec(open('main.py').read())"]
+# CMD ["python", "-c", "print('API Service Starting...'); import time; time.sleep(1); exec(open('main.py').read())"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

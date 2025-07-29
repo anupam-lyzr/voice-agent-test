@@ -501,6 +501,70 @@ class ClientRepository:
         except Exception as e:
             logger.error(f"Error updating call outcome: {e}")
 
+        # ADD THESE METHODS TO ClientRepository class in database.py:
+
+    async def get_test_clients(self, limit: int = 50) -> List[Client]:
+        """Get all test clients"""
+        try:
+            cursor = self.db.clients.find({
+                "isTestClient": True
+            }).sort("createdAt", -1).limit(limit)
+            
+            clients = []
+            async for doc in cursor:
+                doc["id"] = str(doc["_id"])
+                clients.append(Client(**doc))
+            
+            return clients
+        except Exception as e:
+            logger.error(f"Error getting test clients: {e}")
+            return []
+
+    async def delete_client(self, client_id: str) -> bool:
+        """Delete a client (only for test clients)"""
+        try:
+            if not ObjectId.is_valid(client_id):
+                return False
+            
+            # Only allow deletion of test clients
+            client = await self.get_client_by_id(client_id)
+            if not client or not getattr(client, 'is_test_client', False):
+                return False
+            
+            result = await self.db.clients.delete_one({"_id": ObjectId(client_id)})
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Error deleting client: {e}")
+            return False
+
+    # ADD THESE METHODS TO SessionRepository class:
+
+    async def get_recent_sessions(self, limit: int = 20) -> List[CallSession]:
+        """Get recent call sessions"""
+        try:
+            cursor = self.db.call_sessions.find().sort("startedAt", -1).limit(limit)
+            sessions = []
+            
+            async for doc in cursor:
+                sessions.append(CallSession(**doc))
+            
+            return sessions
+        except Exception as e:
+            logger.error(f"Error getting recent sessions: {e}")
+            return []
+
+    # ADD THIS TO THE Client model in shared-source/models/client.py:
+
+    def get_latest_call_outcome(self) -> Optional[str]:
+        """Get the latest call outcome"""
+        if self.call_history:
+            latest_call = self.call_history[-1]
+            return latest_call.get("outcome")
+        return None
+
+    # ADD THIS FIELD TO Client model:
+    is_test_client: bool = Field(default=False, description="Whether this is a test client")
+
 class SessionRepository:
     """Repository for call session operations"""
     
