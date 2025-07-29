@@ -20,11 +20,11 @@ from shared.utils.database import client_repo, session_repo
 from shared.utils.redis_client import metrics_cache
 
 # Import existing optimized services
-from ..services.voice_processor import VoiceProcessor
-from ..services.hybrid_tts import HybridTTSService
-from ..services.lyzr_client import get_lyzr_client
-from ..services.elevenlabs_client import get_elevenlabs_client
-from ..services.deepgram_client import get_deepgram_client
+from services.voice_processor import VoiceProcessor
+from services.hybrid_tts import HybridTTSService
+from services.lyzr_client import lyzr_client as get_lyzr_client
+from services.elevenlabs_client import elevenlabs_client as get_elevenlabs_client
+from services.deepgram_client import deepgram_client as get_deepgram_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])

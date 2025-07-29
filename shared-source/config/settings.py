@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     max_call_attempts: int = Field(default=6, env="MAX_CALL_ATTEMPTS")
     
     # Voice Processing Settings
-    default_voice_id: str = Field(default="pNInz6obpgDQGcFmaJgB", env="VOICE_ID")  # Adam voice
+    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0", env="VOICE_ID")  # Adam voice
     voice_stability: float = Field(default=0.35, env="VOICE_STABILITY")
     voice_similarity_boost: float = Field(default=0.75, env="VOICE_SIMILARITY_BOOST") 
     voice_style: float = Field(default=0.45, env="VOICE_STYLE")
@@ -122,7 +122,11 @@ class Settings(BaseSettings):
         else:
             auth = ""
         
-        ssl_params = "?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&retryWrites=false" if self.documentdb_ssl else ""
+        if self.documentdb_ssl:
+            ssl_params = "?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&retryWrites=false"
+        else:
+            # For local development with Docker MongoDB, add authSource=admin
+            ssl_params = "?authSource=admin" if auth else ""
         
         return f"mongodb://{auth}{self.documentdb_host}:{self.documentdb_port}/{self.documentdb_database}{ssl_params}"
     
@@ -133,7 +137,8 @@ class Settings(BaseSettings):
             "stability": self.voice_stability,
             "similarity_boost": self.voice_similarity_boost, 
             "style": self.voice_style,
-            "use_speaker_boost": self.use_speaker_boost
+            "use_speaker_boost": self.use_speaker_boost,
+            "speed": self.voice_speed if hasattr(self, 'voice_speed') else 0.87  # Default speed
         }
     
     @property

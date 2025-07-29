@@ -11,7 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncI
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
 from bson import ObjectId
 from bson.errors import InvalidId
-
+from pydantic import Field
 from shared.config.settings import settings
 from shared.models.client import Client, ClientSearchFilter, CampaignStatus, CallOutcome, CRMTag
 from shared.models.call_session import CallSession

@@ -194,7 +194,7 @@ class VoiceProcessor:
             response = await self.httpx_client.post(
                 f"{settings.lyzr_api_base_url}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {settings.lyzr_api_key}",
+                    "Authorization": f"Bearer {settings.lyzr_user_api_key}",
                     "Content-Type": "application/json"
                 },
                 json=lyzr_payload,

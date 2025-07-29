@@ -46,7 +46,8 @@ class ElevenLabsTTSClient:
             "stability": settings.voice_stability,
             "similarity_boost": settings.voice_similarity_boost,
             "style": settings.voice_style,
-            "use_speaker_boost": settings.use_speaker_boost
+            "use_speaker_boost": settings.use_speaker_boost,
+            "speed": settings.voice_speed if hasattr(settings, 'voice_speed') else 0.87  # Default speed
         }
     
     def is_configured(self) -> bool:

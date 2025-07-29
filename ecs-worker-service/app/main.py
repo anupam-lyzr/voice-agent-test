@@ -21,21 +21,29 @@ logger = logging.getLogger(__name__)
 
 # Import services with fallbacks
 try:
-    from .services.campaign_processor import CampaignProcessor
-    from .services.sqs_consumer import SQSConsumer
-    from .services.call_summarizer import CallSummarizer
-    from .services.email_service import EmailService
-    
-    # Import existing services
-    from .services.crm_integration import CRMIntegration
-    from .services.agent_assignment import AgentAssignment
-    
+    from services.campaign_processor import CampaignProcessor
+    from services.sqs_consumer import SQSConsumer  
+    from services.call_summarizer import CallSummarizerService as CallSummarizer
+    from services.crm_integration import CRMIntegration
+    from services.email_service import EmailService
+    from services.agent_assignment import AgentAssignment
     services_available = True
     logger.info("✅ All worker services imported successfully")
-    
 except ImportError as e:
     logger.warning(f"⚠️ Service import failed: {e} - using basic mode")
     services_available = False
+
+
+try:
+    from shared.config.settings import settings
+    from shared.utils.database import init_database, close_database
+    from shared.utils.redis_client import init_redis, close_redis
+    shared_available = True
+    logger.info("✅ Shared utilities imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Shared utilities not available: {e}")
+    shared_available = False
+
 
 class WorkerService:
     """Main worker service for background processing"""
@@ -65,11 +73,25 @@ class WorkerService:
         """Start the worker service"""
         
         logger.info("🚀 Starting Voice Agent Worker Service")
-        logger.info(f"🎯 Environment: {os.getenv('ENVIRONMENT', 'development')}")
+        logger.info(f"🎯 Environment: {getattr(settings, 'environment', 'development') if shared_available else 'development'}")
         logger.info(f"🔧 Services Available: {services_available}")
         
         self.running = True
         self.start_time = datetime.utcnow()
+        
+        # Initialize shared services if available
+        if shared_available:
+            try:
+                await init_database()
+                logger.info("✅ Database initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Database initialization failed: {e}")
+            
+            try:
+                await init_redis()
+                logger.info("✅ Redis initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Redis initialization failed: {e}")
         
         logger.info("✅ Worker service started successfully")
         
@@ -91,9 +113,13 @@ class WorkerService:
     async def _process_with_services(self):
         """Process with full service integration"""
         try:
-            # Check business hours
-            current_hour = datetime.now().hour
-            is_business_hours = 9 <= current_hour < 17  # 9 AM to 5 PM
+            # Check business hours using shared settings
+            if shared_available and hasattr(settings, 'is_business_hours'):
+                is_business_hours = settings.is_business_hours()
+            else:
+                # Fallback business hours check
+                current_hour = datetime.now().hour
+                is_business_hours = 9 <= current_hour < 17  # 9 AM to 5 PM
             
             if not is_business_hours:
                 if self.processed_count % 20 == 0:  # Log every 20 cycles
@@ -276,12 +302,24 @@ class WorkerService:
         # Cleanup services
         if services_available:
             try:
-                await self.campaign_processor.close()
-                await self.call_summarizer.close()
-                await self.email_service.close()
+                if hasattr(self, 'campaign_processor'):
+                    await self.campaign_processor.close()
+                if hasattr(self, 'call_summarizer'):
+                    await self.call_summarizer.close()
+                if hasattr(self, 'email_service'):
+                    await self.email_service.close()
                 logger.info("✅ Services cleaned up")
             except Exception as e:
                 logger.warning(f"⚠️ Cleanup warning: {e}")
+        
+        # Close shared utilities
+        if shared_available:
+            try:
+                await close_database()
+                await close_redis()
+                logger.info("✅ Shared utilities closed")
+            except Exception as e:
+                logger.warning(f"⚠️ Shared cleanup warning: {e}")
         
         uptime = (datetime.utcnow() - self.start_time).total_seconds() if self.start_time else 0
         logger.info(f"✅ Worker service stopped - Processed: {self.processed_count} tasks, Uptime: {int(uptime)}s")

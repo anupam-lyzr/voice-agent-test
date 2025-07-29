@@ -11,16 +11,17 @@ from pathlib import Path
 
 # Configuration
 ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
-VOICE_ID = os.getenv('VOICE_ID', 'pNInz6obpgDQGcFmaJgB')  # Adam voice
+VOICE_ID = os.getenv('VOICE_ID', 'xtENCNNHEgtE8xBjLMt0')  # Adam voice
 OUTPUT_DIR = Path('audio-generation/generated_audio')
 CONTENT_DIR = Path('audio-generation/audio_content')
 
 # Voice settings for natural speech
 VOICE_SETTINGS = {
-    "stability": 0.35,
-    "similarity_boost": 0.75,
-    "style": 0.45,
-    "use_speaker_boost": True
+    "stability": 0.55,
+    "use_speaker_boost": True,
+    "similarity_boost": 0.7,
+    "style": 0.19999999999999996,
+    "speed": 0.8700000000000001
 }
 
 async def generate_audio_file(text: str, filename: str):

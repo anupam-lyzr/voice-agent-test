@@ -19,3 +19,6 @@ boto3==1.29.7
 aiofiles==23.2.0
 orjson==3.9.10
 pytz==2023.3
+
+#audio generation
+pydub==0.25.1
