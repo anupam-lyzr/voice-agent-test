@@ -34,7 +34,7 @@ def lambda_handler(event, context):
             QueueUrl=queue_url,
             MaxNumberOfMessages=10,
             WaitTimeSeconds=5,
-            VisibilityTimeoutSeconds=300
+            VisibilityTimeout=300
         )
         
         messages = response.get('Messages', [])

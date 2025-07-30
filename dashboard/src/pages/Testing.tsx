@@ -384,7 +384,7 @@ export default function Testing() {
                 <Rocket className="h-5 w-5" /> Create Test Agent
               </CardTitle>
               <CardDescription>
-                Add a temporary agent to Redis for testing.
+                Add a new agent to the database for testing.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

@@ -46,7 +46,7 @@ class AgentAssignment:
         self.calendar_service = None
         
         # Initialize Google Calendar service
-        if GOOGLE_AVAILABLE and settings.google_service_account_file:
+        if GOOGLE_AVAILABLE and getattr(settings, 'google_service_account_file', ''):
             try:
                 self._init_calendar_service()
                 logger.info("✅ Google Calendar service initialized")

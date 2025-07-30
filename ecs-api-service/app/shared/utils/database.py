@@ -5,6 +5,7 @@ DocumentDB/MongoDB connection and operations
 
 import asyncio
 import logging
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncIOMotorCollection
@@ -132,12 +133,17 @@ class ClientRepository:
     async def get_client_by_id(self, client_id: str) -> Optional[Client]:
         """Get client by MongoDB ID"""
         try:
-            if not ObjectId.is_valid(client_id):
+            # Handle both ObjectId and string formats
+            if isinstance(client_id, str) and ObjectId.is_valid(client_id):
+                object_id = ObjectId(client_id)
+            else:
+                logger.error(f"Invalid client_id format: {client_id}")
                 return None
             
-            doc = await self.db.clients.find_one({"_id": ObjectId(client_id)})
+            doc = await self.db.clients.find_one({"_id": object_id})
             if doc:
-                doc["id"] = str(doc["_id"])
+                doc["id"] = str(doc["_id"])  # Convert ObjectId to string
+                del doc["_id"]  # Remove original _id
                 return Client(**doc)
             return None
         except Exception as e:
@@ -292,7 +298,7 @@ class ClientRepository:
             clients = []
             
             async for doc in cursor:
-                doc["id"] = str(doc["_id"])
+                doc["id"] = str(doc["_id"]) 
                 clients.append(Client(**doc))
             
             return clients
@@ -501,18 +507,17 @@ class ClientRepository:
         except Exception as e:
             logger.error(f"Error updating call outcome: {e}")
 
-        # ADD THESE METHODS TO ClientRepository class in database.py:
 
     async def get_test_clients(self, limit: int = 50) -> List[Client]:
         """Get all test clients"""
         try:
             cursor = self.db.clients.find({
-                "isTestClient": True
-            }).sort("createdAt", -1).limit(limit)
+                "is_test_client": True
+            }).sort("created_at", -1).limit(limit)
             
             clients = []
             async for doc in cursor:
-                doc["id"] = str(doc["_id"])
+                doc["id"] = str(doc.pop("_id"))  # Convert ObjectId to string and rename
                 clients.append(Client(**doc))
             
             return clients
@@ -537,7 +542,6 @@ class ClientRepository:
             logger.error(f"Error deleting client: {e}")
             return False
 
-    # ADD THESE METHODS TO SessionRepository class:
 
     async def get_recent_sessions(self, limit: int = 20) -> List[CallSession]:
         """Get recent call sessions"""
@@ -610,6 +614,118 @@ class SessionRepository:
         except Exception as e:
             logger.error(f"Failed to get active sessions: {e}")
             return []
+    async def get_recent_sessions(self, limit: int = 20) -> List[CallSession]:
+        """Get recent call sessions"""
+        try:
+            cursor = self.db.call_sessions.find().sort("started_at", -1).limit(limit)
+            sessions = []
+            
+            async for doc in cursor:
+                doc["session_id"] = doc.get("session_id", str(doc["_id"]))
+                sessions.append(CallSession(**doc))
+            
+            return sessions
+        except Exception as e:
+            logger.error(f"Error getting recent sessions: {e}")
+            return []
+
+# Add to database.py - create TestAgentRepository:
+
+class TestAgent(BaseModel):
+    """Test agent model"""
+    id: Optional[str] = Field(None, description="Agent ID")
+    name: str
+    email: str
+    google_calendar_id: Optional[str] = None
+    timezone: str = "America/New_York"
+    specialties: List[str] = Field(default_factory=list)
+    working_hours: str = "9AM-5PM"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class TestAgentRepository:
+    """Repository for test agent operations"""
+    
+    def __init__(self, db_client: DatabaseClient):
+        self.db = db_client
+    
+    async def create_test_agent(self, agent: TestAgent) -> str:
+        """Create a new test agent"""
+        try:
+            agent_dict = agent.model_dump(exclude={"id"})
+            result = await self.db.database.test_agents.insert_one(agent_dict)
+            logger.info(f"Created test agent: {agent.name} ({result.inserted_id})")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Failed to create test agent: {e}")
+            raise
+    
+    async def get_all_test_agents(self) -> List[TestAgent]:
+        """Get all test agents"""
+        try:
+            cursor = self.db.database.test_agents.find().sort("created_at", -1)
+            agents = []
+            
+            async for doc in cursor:
+                # Convert ObjectId to string and set as id field
+                agent_data = {
+                    "id": str(doc["_id"]),
+                    "name": doc["name"],
+                    "email": doc["email"],
+                    "google_calendar_id": doc.get("google_calendar_id", ""),
+                    "timezone": doc.get("timezone", "America/New_York"),
+                    "specialties": doc.get("specialties", []),
+                    "working_hours": doc.get("working_hours", "9AM-5PM"),
+                    "created_at": doc.get("created_at"),
+                    "updated_at": doc.get("updated_at")
+                }
+                agents.append(TestAgent(**agent_data))
+            
+            return agents
+        except Exception as e:
+            logger.error(f"Error getting test agents: {e}")
+            return []
+    
+    async def get_test_agent_by_id(self, agent_id: str) -> Optional[TestAgent]:
+        """Get test agent by ID"""
+        try:
+            if not ObjectId.is_valid(agent_id):
+                return None
+            
+            doc = await self.db.database.test_agents.find_one({"_id": ObjectId(agent_id)})
+            if doc:
+                # Convert ObjectId to string
+                agent_data = {
+                    "id": str(doc["_id"]),
+                    "name": doc["name"],
+                    "email": doc["email"],
+                    "google_calendar_id": doc.get("google_calendar_id", ""),
+                    "timezone": doc.get("timezone", "America/New_York"),
+                    "specialties": doc.get("specialties", []),
+                    "working_hours": doc.get("working_hours", "9AM-5PM"),
+                    "created_at": doc.get("created_at"),
+                    "updated_at": doc.get("updated_at")
+                }
+                return TestAgent(**agent_data)
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get test agent {agent_id}: {e}")
+            return None
+
+# Add test_agent_repo to global instances
+test_agent_repo: Optional[TestAgentRepository] = None
+
+async def init_database():
+    """Initialize database connection and repositories"""
+    global client_repo, session_repo, test_agent_repo
+    
+    await db_client.connect()
+    client_repo = ClientRepository(db_client)
+    session_repo = SessionRepository(db_client)
+    test_agent_repo = TestAgentRepository(db_client)  # Add this
+    
+    logger.info("✅ Database repositories initialized")
+
 
 # Global database client instance
 db_client = DatabaseClient()
@@ -618,15 +734,6 @@ db_client = DatabaseClient()
 client_repo: Optional[ClientRepository] = None
 session_repo: Optional[SessionRepository] = None
 
-async def init_database():
-    """Initialize database connection and repositories"""
-    global client_repo, session_repo
-    
-    await db_client.connect()
-    client_repo = ClientRepository(db_client)
-    session_repo = SessionRepository(db_client)
-    
-    logger.info("✅ Database repositories initialized")
 
 async def close_database():
     """Close database connection"""

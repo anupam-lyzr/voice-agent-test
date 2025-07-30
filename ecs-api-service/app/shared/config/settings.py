@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     lyzr_user_api_key: str = Field(default="", env="LYZR_USER_API_KEY")
     
     # CRM Configuration
-    capsule_api_key: str = Field(default="", env="CAPSULE_API_KEY")
+    capsule_api_token: str = Field(default="", env="CAPSULE_API_TOKEN")
     capsule_api_url: str = Field(default="https://api.capsulecrm.com", env="CAPSULE_API_URL")
     
     # Google Calendar Integration

@@ -8,7 +8,7 @@ import httpx
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-
+import base64
 from shared.config.settings import settings
 from shared.models.client import Client, CRMTag, CallOutcome
 from shared.utils.database import client_repo

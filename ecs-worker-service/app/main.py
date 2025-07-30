@@ -53,21 +53,34 @@ class WorkerService:
         self.processed_count = 0
         self.start_time = None
         
-        # Initialize services if available
-        if services_available:
-            self.campaign_processor = CampaignProcessor()
-            self.sqs_consumer = SQSConsumer()
-            self.call_summarizer = CallSummarizer()
-            self.email_service = EmailService()
-            self.crm_integration = CRMIntegration()
-            self.agent_assignment = AgentAssignment()
-            logger.info("✅ All services initialized")
-        else:
-            logger.info("📝 Running in basic mode - services not available")
+        # Don't initialize services here - wait until database is ready
+        self.services_initialized = False
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    
+    async def _initialize_services(self):
+        """Initialize services after database is ready"""
+        if services_available and not self.services_initialized:
+            try:
+                self.campaign_processor = CampaignProcessor()
+                self.sqs_consumer = SQSConsumer()
+                self.call_summarizer = CallSummarizer()
+                self.email_service = EmailService()
+                self.crm_integration = CRMIntegration()
+                self.agent_assignment = AgentAssignment()
+                self.services_initialized = True
+                logger.info("✅ All services initialized")
+            except Exception as e:
+                logger.error(f"❌ Service initialization failed: {e}")
+                self.services_initialized = False
+        elif not services_available:
+            logger.info("📝 Running in basic mode - services not available")
+            self.services_initialized = True
+            
+
     
     async def start(self):
         """Start the worker service"""
@@ -79,7 +92,7 @@ class WorkerService:
         self.running = True
         self.start_time = datetime.utcnow()
         
-        # Initialize shared services if available
+        # Initialize shared services FIRST
         if shared_available:
             try:
                 await init_database()
@@ -93,12 +106,15 @@ class WorkerService:
             except Exception as e:
                 logger.warning(f"⚠️ Redis initialization failed: {e}")
         
+        # NOW initialize services (after database is ready)
+        await self._initialize_services()
+        
         logger.info("✅ Worker service started successfully")
         
         # Main processing loop
         while self.running:
             try:
-                if services_available:
+                if self.services_initialized:
                     await self._process_with_services()
                 else:
                     await self._process_basic_mode()
@@ -109,11 +125,15 @@ class WorkerService:
             except Exception as e:
                 logger.error(f"❌ Worker loop error: {e}")
                 await asyncio.sleep(60)  # Wait longer on error
-    
+
     async def _process_with_services(self):
         """Process with full service integration"""
         try:
             # Check business hours using shared settings
+            if not self.services_initialized:
+                logger.warning("⚠️ Services not yet initialized - skipping processing")
+                return
+            
             if shared_available and hasattr(settings, 'is_business_hours'):
                 is_business_hours = settings.is_business_hours()
             else:

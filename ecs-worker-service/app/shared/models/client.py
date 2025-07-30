@@ -160,6 +160,8 @@ class Client(BaseModel):
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
+    is_test_client: bool = Field(default=False, description="Whether this is a test client")
+    
     def add_call_attempt(self, attempt: CallAttempt):
         """Add a new call attempt to history"""
         self.call_history.append(attempt)

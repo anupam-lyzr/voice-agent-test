@@ -200,9 +200,9 @@ export default function Dashboard() {
                 {health.status.toUpperCase()}
               </Badge>
               <span className="text-sm text-muted-foreground">
-                Components: Database {health.components.database ? "✓" : "✗"},
-                Cache {health.components.cache ? "✓" : "✗"}, Voice{" "}
-                {health.components.voice_processor ? "✓" : "✗"}
+                Components: Database {health.components?.database ? "✓" : "✗"},
+                Cache {health.components?.cache ? "✓" : "✗"}, Voice{" "}
+                {health.components?.voice_processor ? "✓" : "✗"}
               </span>
             </div>
           </CardContent>

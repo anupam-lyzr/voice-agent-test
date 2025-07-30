@@ -333,7 +333,21 @@ class HybridTTSService:
             content += str(sorted(client_data.items()))
         
         return hashlib.md5(content.encode()).hexdigest()
-    
+    async def is_configured(self) -> bool:
+        """Check if hybrid TTS service is configured"""
+        try:
+            # Check if ElevenLabs is configured
+            elevenlabs_configured = bool(settings.elevenlabs_api_key and 
+                                    not settings.elevenlabs_api_key.startswith("your_"))
+            
+            # Check if static audio directory exists
+            static_audio_exists = os.path.exists("audio-generation/generated_audio/") or \
+                                bool(settings.s3_bucket_audio)
+            
+            return elevenlabs_configured or static_audio_exists
+        except Exception:
+            return False
+        
     def get_performance_stats(self) -> Dict[str, Any]:
         """Get performance statistics"""
         if self.total_requests == 0:

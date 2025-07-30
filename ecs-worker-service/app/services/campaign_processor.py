@@ -50,6 +50,10 @@ class CampaignProcessor:
             logger.error("❌ Twilio not configured - cannot process campaign")
             return {"error": "twilio_not_configured"}
         
+        if not client_repo:
+            logger.error("❌ Database repository not available")
+            return {"error": "database_not_available"}
+        
         try:
             # Get clients ready for calling
             clients = await client_repo.get_clients_for_campaign(limit=batch_size)

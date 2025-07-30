@@ -160,6 +160,8 @@ class Client(BaseModel):
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
+    is_test_client: bool = Field(default=False, description="Whether this is a test client")
+    
     def add_call_attempt(self, attempt: CallAttempt):
         """Add a new call attempt to history"""
         self.call_history.append(attempt)
@@ -219,7 +221,14 @@ class Client(BaseModel):
         answered_calls = sum(1 for attempt in self.call_history 
                            if attempt.outcome in [CallOutcome.ANSWERED, CallOutcome.INTERESTED, CallOutcome.NOT_INTERESTED])
         return answered_calls / len(self.call_history)
-    
+
+    def get_latest_call_outcome(self) -> Optional[str]:
+        """Get the latest call outcome"""
+        if self.call_history:
+            latest_call = self.call_history[-1]
+            return latest_call.get("outcome")
+        return None
+      
     class Config:
         populate_by_name = True
         json_encoders = {

@@ -56,7 +56,7 @@ class SQSConsumer:
                 QueueUrl=self.queue_url,
                 MaxNumberOfMessages=max_messages,
                 WaitTimeSeconds=5,  # Long polling
-                VisibilityTimeoutSeconds=300  # 5 minutes to process
+                VisibilityTimeout=300  # 5 minutes to process
             )
             
             messages = response.get('Messages', [])

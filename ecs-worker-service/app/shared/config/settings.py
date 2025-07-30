@@ -51,12 +51,14 @@ class Settings(BaseSettings):
     lyzr_user_api_key: str = Field(default="", env="LYZR_USER_API_KEY")
     
     # CRM Configuration
-    capsule_api_key: str = Field(default="", env="CAPSULE_API_KEY")
+    capsule_api_token: str = Field(default="", env="CAPSULE_API_TOKEN")
     capsule_api_url: str = Field(default="https://api.capsulecrm.com", env="CAPSULE_API_URL")
     
     # Google Calendar Integration
     google_calendar_client_id: str = Field(default="", env="GOOGLE_CALENDAR_CLIENT_ID")
     google_calendar_client_secret: str = Field(default="", env="GOOGLE_CALENDAR_CLIENT_SECRET")
+    google_service_account_file: str = Field(default="", env="GOOGLE_SERVICE_ACCOUNT_FILE")
+
     
     # Email Configuration (SES)
     ses_region: str = Field(default="us-east-1", env="SES_REGION")
@@ -108,6 +110,7 @@ class Settings(BaseSettings):
     # ECS Settings
     ecs_cluster_name: str = Field(default="voice-agent-cluster", env="ECS_CLUSTER_NAME")
     ecs_service_name: str = Field(default="voice-agent-api", env="ECS_SERVICE_NAME")
+
     
     class Config:
         env_file = ".env"
