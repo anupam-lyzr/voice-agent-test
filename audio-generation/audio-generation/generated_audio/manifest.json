@@ -1,0 +1,22 @@
+{
+  "generated_at": "0.092916333",
+  "voice_id": "xtENCNNHEgtE8xBjLMt0",
+  "voice_settings": {
+    "stability": 0.55,
+    "use_speaker_boost": true,
+    "similarity_boost": 0.7,
+    "style": 0.19999999999999996,
+    "speed": 0.8700000000000001
+  },
+  "files": [
+    "greeting.mp3",
+    "interested_followup.mp3",
+    "not_interested_followup.mp3",
+    "schedule_morning.mp3",
+    "schedule_afternoon.mp3",
+    "dnc_confirmation.mp3",
+    "goodbye.mp3"
+  ],
+  "successful": 0,
+  "failed": 7
+}

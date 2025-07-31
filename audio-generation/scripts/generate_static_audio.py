@@ -9,11 +9,17 @@ import asyncio
 import httpx
 from pathlib import Path
 
+# Get the directory of the current script to build robust paths
+SCRIPT_DIR = Path(__file__).parent.resolve()
+
 # Configuration
-ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
+# ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY')
+ELEVENLABS_API_KEY='sk_76450d6c6b4d7f6ed594189cfdc5d307ae96b9e98fc0d494'
+
 VOICE_ID = os.getenv('VOICE_ID', 'xtENCNNHEgtE8xBjLMt0')  # Adam voice
-OUTPUT_DIR = Path('audio-generation/generated_audio')
-CONTENT_DIR = Path('audio-generation/audio_content')
+# Set paths relative to the script's parent directory
+OUTPUT_DIR = SCRIPT_DIR.parent / 'generated_audio'
+CONTENT_DIR = SCRIPT_DIR.parent / 'audio_content'
 
 # Voice settings for natural speech
 VOICE_SETTINGS = {
@@ -72,7 +78,7 @@ async def main():
     print("🎵 Generating static audio files...")
     
     # Create output directory
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     # Audio files to generate
     audio_files = {
