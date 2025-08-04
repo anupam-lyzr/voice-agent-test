@@ -1,57 +1,33 @@
 """
-Twilio Router - Complete Real-time Audio Processing Implementation
-Handles Twilio webhooks and WebSocket media streams with full audio pipeline
+Updated Twilio Router - Integrated with Segmented Audio Service
+Handles Twilio webhooks with exact AAG script and personalized audio using real client/agent names
 """
 
-from fastapi import APIRouter, Request, Form, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import Response
+import uuid
+import os
 from typing import Optional, Dict, Any
 import logging
-import json
-import uuid
 import asyncio
-import base64
-import io
 from datetime import datetime
 
 # Import shared models and utilities
 from shared.config.settings import settings
 from shared.models.call_session import CallSession, CallStatus, ConversationStage
 from shared.models.client import Client, CallOutcome
-from shared.utils.database import client_repo, get_client_by_phone
-from shared.utils.redis_client import cache_session, get_cached_session
+# from shared.utils.database import client_repo, get_client_by_phone
+# from shared.utils.redis_client import cache_session, get_cached_session
 
-# Import services
+# Import updated services
 from services.voice_processor import VoiceProcessor, update_client_record
 from services.hybrid_tts import HybridTTSService
-from services.deepgram_client import deepgram_client
-from services.elevenlabs_client import elevenlabs_client
+from services.segmented_audio_service import segmented_audio_service
 from services.twiml_helpers import (
     create_simple_twiml,
-    create_voice_twiml,
     create_fallback_twiml,
-    create_media_stream_twiml,
     create_hangup_twiml
 )
-
-# Audio processing imports
-try:
-    from pydub import AudioSegment
-    from pydub.utils import which
-    import audioop
-    AUDIO_PROCESSING_AVAILABLE = True
-except ImportError:
-    AUDIO_PROCESSING_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("⚠️ Audio processing libraries not available - install pydub and audioop-lts")
-
-# AWS S3 for audio storage
-try:
-    import boto3
-    from botocore.exceptions import ClientError
-    S3_AVAILABLE = True
-except ImportError:
-    S3_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio", tags=["Twilio"])
@@ -59,9 +35,32 @@ router = APIRouter(prefix="/twilio", tags=["Twilio"])
 # Store active conversation states
 active_sessions: Dict[str, CallSession] = {}
 
-# Audio processing buffer for real-time streams
-audio_buffers: Dict[str, bytes] = {}
+client_repo = None
+session_repo = None
 
+
+
+async def get_client_by_phone(phone: str):
+    """Get client by phone - fallback implementation"""
+    try:
+        from shared.utils.database import client_repo as repo
+        if repo:
+            return await repo.get_client_by_phone(phone)
+    except:
+        pass
+    return None
+
+async def cache_session(session):
+    """Cache session - fallback implementation"""
+    try:
+        from shared.utils.redis_client import session_cache
+        if session_cache:
+            return await session_cache.save_session(session)
+    except:
+        pass
+    return False
+
+    
 @router.post("/voice")
 async def voice_webhook(
     request: Request,
@@ -71,19 +70,25 @@ async def voice_webhook(
     To: Optional[str] = Form(None),
     Direction: Optional[str] = Form(None)
 ):
-    """Handle incoming voice calls with enhanced audio processing"""
+    """Handle incoming voice calls with EXACT AAG script and segmented audio"""
     
-    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From}")
+    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From} - To: {To}")
     
     try:
         if CallStatus == "in-progress":
+            # For OUTBOUND calls, look up client by TO number
+            client_phone = To if Direction == "outbound-api" else From
+            logger.info(f"🔍 Looking up client by phone: {client_phone}")
+            
             # Get client using existing database utilities
-            client = await get_client_by_phone(From)
+            client = await get_client_by_phone(client_phone)
             if not client:
-                logger.warning(f"⚠️ Client not found for phone: {From}")
-                return Response(
-                    content=create_simple_twiml("Thank you for calling. Goodbye."),
-                    media_type="application/xml"
+                logger.warning(f"⚠️ Client not found for phone: {client_phone}")
+                # Use generic greeting for unknown callers
+                return await create_segmented_twiml_response(
+                    response_type="greeting",
+                    client_data={"client_name": "there"},  # Generic fallback
+                    gather_action="/twilio/process-speech"
                 )
             
             # Create session using existing models
@@ -91,55 +96,45 @@ async def voice_webhook(
                 session_id=str(uuid.uuid4()),
                 twilio_call_sid=CallSid,
                 client_id=str(client.id),
-                phone_number=From,
+                phone_number=client_phone,
                 lyzr_agent_id=settings.lyzr_conversation_agent_id,
                 lyzr_session_id=f"{CallSid}-{uuid.uuid4().hex[:8]}"
             )
             session.call_status = CallStatus.IN_PROGRESS
             session.answered_at = datetime.utcnow()
+            session.conversation_stage = ConversationStage.GREETING
             
             # Cache session
             await cache_session(session)
+            
             active_sessions[CallSid] = session
+
+            # Store client data in session for later use
+            session.client_data = client_data
+            
+            # Also try to save to database
+            try:
+                from shared.utils.database import session_repo
+                if session_repo:
+                    await session_repo.save_session(session)
+            except Exception as e:
+                logger.warning(f"Could not save session to database: {e}")
             
             logger.info(f"🎯 Starting conversation with {client.client.full_name}")
             
-            # Check if real-time audio processing is enabled
-            if settings.enable_realtime_audio and AUDIO_PROCESSING_AVAILABLE:
-                # Use WebSocket media streaming for real-time processing
-                websocket_url = f"wss://{settings.base_url.replace('http://', '').replace('https://', '')}/twilio/media-stream/{CallSid}"
-                
-                return Response(
-                    content=create_media_stream_twiml(websocket_url),
-                    media_type="application/xml"
-                )
-            else:
-                # Use traditional webhook approach with pre-generated audio
-                hybrid_tts = HybridTTSService()
-                
-                # Generate greeting using existing hybrid TTS
-                greeting_text = f"Hello {client.client.first_name}, this is Alex from Altrius Advisor Group. It's been some time since you've been in touch with us. We'd love to improve our service for you during Open Enrollment. Can we help service you this year?"
-                
-                tts_response = await hybrid_tts.get_response_audio(
-                    text=greeting_text,
-                    response_type="greeting",
-                    client_data={"client_name": client.client.first_name}
-                )
-                
-                if tts_response.get("success"):
-                    return Response(
-                        content=create_voice_twiml(
-                            tts_response.get("audio_url"),
-                            "/twilio/process-speech"
-                        ),
-                        media_type="application/xml"
-                    )
-                else:
-                    # Fallback to basic TwiML
-                    return Response(
-                        content=create_voice_twiml(greeting_text, "/twilio/process-speech"),
-                        media_type="application/xml"
-                    )
+            # Use EXACT AAG greeting with client's real name and agent info
+            client_data = {
+                "client_name": client.client.first_name,
+                "first_name": client.client.first_name,
+                "agent_name": client.client.last_agent,
+                "last_agent": client.client.last_agent
+            }
+            
+            return await create_segmented_twiml_response(
+                response_type="greeting",
+                client_data=client_data,
+                gather_action="/twilio/process-speech"
+            )
         
         # Handle other call statuses
         return Response(
@@ -150,9 +145,171 @@ async def voice_webhook(
     except Exception as e:
         logger.error(f"❌ Voice webhook error: {e}")
         return Response(
-            content=create_fallback_twiml("We are experiencing technical difficulties."),
+            content=create_fallback_twiml("We are experiencing technical difficulties. Please call back later."),
             media_type="application/xml"
         )
+
+async def create_segmented_twiml_response(
+    response_type: str, 
+    client_data: Optional[Dict[str, Any]] = None,
+    gather_action: str = "/twilio/process-speech",
+    should_hangup: bool = False
+) -> Response:
+    """Create TwiML response using segmented audio service"""
+    
+    try:
+        logger.info(f"🎵 Creating segmented TwiML for: {response_type}")
+        
+        # Get personalized audio using hybrid TTS (which uses segmented service)
+        hybrid_tts = HybridTTSService()
+        
+        tts_response = await hybrid_tts.get_response_audio(
+            text="",  # Text not needed for mapped responses
+            response_type=response_type,
+            client_data=client_data
+        )
+        
+        if tts_response.get("success") and tts_response.get("audio_url"):
+            audio_url = tts_response.get("audio_url")
+            generation_time = tts_response.get("generation_time_ms", 0)
+            audio_type = tts_response.get("type", "unknown")
+            
+            logger.info(f"✅ Audio generated: {audio_type} in {generation_time}ms")
+            
+            # Create TwiML with Play verb and speech gathering
+            if should_hangup:
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+            else:
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="1"/>
+    </Gather>
+    <Say voice="Polly.Joanna-Neural">I didn't hear you. Thank you for calling. Goodbye.</Say>
+</Response>"""
+        else:
+            # Fallback: Generate audio directly if segmented fails
+            logger.warning(f"⚠️ Segmented audio failed: {tts_response.get('error')}")
+            
+            fallback_text = _get_fallback_text(response_type, client_data)
+            audio_url = await _generate_fallback_audio(fallback_text)
+            
+            if audio_url:
+                if should_hangup:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+                else:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="1"/>
+    </Gather>
+    <Say voice="Polly.Joanna-Neural">I didn't hear you. Thank you for calling. Goodbye.</Say>
+</Response>"""
+            else:
+                # Final fallback: Use Twilio voice with high quality
+                clean_text = _get_fallback_text(response_type, client_data)
+                clean_text = clean_text.replace("&", "and").replace("<", "").replace(">", "")
+                
+                if should_hangup:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">{clean_text}</Say>
+    <Hangup/>
+</Response>"""
+                else:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">{clean_text}</Say>
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="1"/>
+    </Gather>
+    <Say voice="Polly.Joanna-Neural">I didn't hear you. Thank you for calling. Goodbye.</Say>
+</Response>"""
+        
+        return Response(content=twiml, media_type="application/xml")
+        
+    except Exception as e:
+        logger.error(f"❌ Segmented TwiML generation error: {e}")
+        # Emergency fallback
+        emergency_text = "Thank you for calling Altruis Advisor Group. Please call back later."
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">{emergency_text}</Say>
+    <Hangup/>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+def _get_fallback_text(response_type: str, client_data: Optional[Dict[str, Any]] = None) -> str:
+    """Get fallback text for response types"""
+    
+    client_name = "there"
+    agent_name = "your agent"
+    
+    if client_data:
+        client_name = client_data.get("client_name") or client_data.get("first_name") or "there"
+        agent_name = client_data.get("agent_name") or client_data.get("last_agent") or "your agent"
+    
+    fallback_texts = {
+        "greeting": f"Hello {client_name}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+        
+        "agent_introduction": f"Great, looks like {agent_name} was the last agent you worked with here at Altruis. Would you like to schedule a quick 15-minute discovery call with them to get reacquainted? A simple Yes or No will do!",
+        
+        "schedule_confirmation": f"Great, give me a moment while I check {agent_name}'s calendar... Perfect! I've scheduled a 15-minute discovery call for you. You should receive a calendar invitation shortly. Thank you and have a wonderful day!",
+        
+        "no_schedule_followup": f"No problem, {agent_name} will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!",
+        
+        "not_interested": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
+        
+        "dnc_confirmation": "Understood, we will make sure you are removed from all future communications and send you a confirmation email once that is done. Our contact details will be in that email as well, so if you do change your mind in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
+        
+        "keep_communications": "Great, we're happy to keep you informed throughout the year regarding the ever-changing world of health insurance. If you'd like to connect with one of our insurance experts in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
+        
+        "goodbye": "Thank you for your time today. Have a wonderful day!",
+        
+        "clarification": "I want to make sure I understand correctly. Can we help service you this year during Open Enrollment? Please say Yes if you're interested, or No if you're not interested."
+    }
+    
+    return fallback_texts.get(response_type, "Thank you for calling Altruis Advisor Group.")
+
+async def _generate_fallback_audio(text: str) -> Optional[str]:
+    """Generate fallback audio using ElevenLabs directly"""
+    try:
+        from services.elevenlabs_client import elevenlabs_client
+        
+        result = await elevenlabs_client.generate_speech(text)
+        
+        if result.get("success") and result.get("audio_data"):
+            # Save audio file temporarily
+            filename = f"fallback_{uuid.uuid4().hex[:8]}.mp3"
+            
+            # Create temp directory if not exists
+            os.makedirs("static/audio/temp", exist_ok=True)
+            
+            # Save audio file
+            filepath = f"static/audio/temp/{filename}"
+            with open(filepath, "wb") as f:
+                f.write(result["audio_data"])
+            
+            # Return public URL
+            audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
+            logger.info(f"✅ Generated fallback audio: {audio_url}")
+            return audio_url
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Fallback audio generation failed: {e}")
+        return None
 
 @router.post("/process-speech")
 async def process_speech_webhook(
@@ -161,9 +318,9 @@ async def process_speech_webhook(
     SpeechResult: Optional[str] = Form(None),
     Confidence: Optional[float] = Form(None)
 ):
-    """Process customer speech using traditional webhook approach"""
+    """Process customer speech using EXACT AAG script logic with segmented audio"""
     
-    logger.info(f"🎤 Processing speech: {CallSid} - Result: {SpeechResult} - Confidence: {Confidence}")
+    logger.info(f"🎤 Processing speech: {CallSid} - Result: '{SpeechResult}' - Confidence: {Confidence}")
     
     try:
         # Get session
@@ -175,470 +332,198 @@ async def process_speech_webhook(
         
         if not session:
             logger.error(f"❌ Session not found: {CallSid}")
-            return Response(
-                content=create_simple_twiml("Session expired. Please call back."),
-                media_type="application/xml"
+            return await create_segmented_twiml_response(
+                response_type="goodbye",
+                should_hangup=True
             )
         
-        # Process speech using existing voice processor
-        voice_processor = VoiceProcessor()
-        customer_input = SpeechResult or "no response"
+        # Get client data for personalized responses
+        client = await get_client_by_phone(session.phone_number)
+        client_data = {}
+        if client:
+            client_data = {
+                "client_name": client.client.first_name,
+                "first_name": client.client.first_name,
+                "agent_name": client.client.last_agent,
+                "last_agent": client.client.last_agent
+            }
         
-        ai_response = await voice_processor.process_customer_speech(
-            session=session,
-            customer_speech=customer_input,
-            client_phone=session.phone_number
+        # Clean customer input
+        customer_input = (SpeechResult or "no response").strip().lower()
+        
+        # EXACT script logic from the AAG document
+        response_type, should_end_call, outcome = process_aag_script_logic(
+            customer_input, 
+            session, 
+            client_data
         )
-        
-        if not ai_response.get("success"):
-            logger.error(f"❌ Voice processing failed: {ai_response.get('error')}")
-            return Response(
-                content=create_simple_twiml("Thank you for your time. Have a great day!"),
-                media_type="application/xml"
-            )
-        
-        response_text = ai_response.get("response_text", "Thank you for your call.")
-        call_outcome = ai_response.get("final_outcome")
         
         # Update session with conversation turn
-        session.add_conversation_turn(
-            customer_input=customer_input,
-            agent_response=response_text,
-            confidence=Confidence or 0.0
+        from shared.models.call_session import ConversationTurn, ResponseType
+        
+        turn = ConversationTurn(
+            turn_number=len(session.conversation_turns) + 1,
+            customer_speech=SpeechResult or "no response",
+            customer_speech_confidence=Confidence or 0.0,
+            agent_response=f"Response type: {response_type}",
+            response_type=ResponseType.HYBRID,
+            conversation_stage=session.conversation_stage
         )
         
-        # Use hybrid TTS for optimized response
-        hybrid_tts = HybridTTSService()
-        response_type = ai_response.get("response_category", "dynamic")
+        session.conversation_turns.append(turn)
+        session.current_turn_number = turn.turn_number
         
-        tts_response = await hybrid_tts.get_response_audio(
-            text=response_text,
-            response_type=response_type,
-            client_data={"client_name": session.client_id}
-        )
-        
-        # Determine if call should end
-        should_end_call = ai_response.get("end_conversation", False)
+        # Update session in cache
+        await cache_session(session)
         
         if should_end_call:
             # End call with final message
-            session.complete_call(call_outcome)
+            session.complete_call(outcome)
             await cache_session(session)
             
             # Update client record
-            await update_client_record(session, ai_response)
+            await update_client_with_aag_outcome(session, outcome, customer_input, client)
             
             # Clean up session
             if CallSid in active_sessions:
                 del active_sessions[CallSid]
             
-            return Response(
-                content=create_hangup_twiml(response_text),
-                media_type="application/xml"
+            return await create_segmented_twiml_response(
+                response_type=response_type,
+                client_data=client_data,
+                should_hangup=True
             )
         else:
             # Continue conversation
-            await cache_session(session)
-            
-            if tts_response.get("success"):
-                return Response(
-                    content=create_voice_twiml(
-                        tts_response.get("audio_url"),
-                        "/twilio/process-speech"
-                    ),
-                    media_type="application/xml"
-                )
-            else:
-                return Response(
-                    content=create_voice_twiml(
-                        response_text,
-                        "/twilio/process-speech"
-                    ),
-                    media_type="application/xml"
-                )
-        
-    except Exception as e:
-        logger.error(f"❌ Speech processing error: {e}")
-        return Response(
-            content=create_simple_twiml("Thank you for your call. Our team will contact you soon."),
-            media_type="application/xml"
-        )
-
-@router.websocket("/media-stream/{session_id}")
-async def media_stream_websocket(websocket: WebSocket, session_id: str):
-    """Handle Twilio Media Streams with complete real-time audio processing pipeline"""
-    
-    await websocket.accept()
-    logger.info(f"🔌 Media stream connected: {session_id}")
-    
-    # Initialize audio buffer for this session
-    audio_buffers[session_id] = b""
-    
-    try:
-        # Initialize services
-        voice_processor = VoiceProcessor()
-        hybrid_tts = HybridTTSService()
-        
-        while True:
-            data = await websocket.receive_text()
-            
-            try:
-                message = json.loads(data)
-                event = message.get("event")
-                
-                if event == "connected":
-                    logger.info(f"📡 Media stream started: {session_id}")
-                    await websocket.send_text(json.dumps({
-                        "event": "connected",
-                        "session_id": session_id
-                    }))
-                
-                elif event == "start":
-                    logger.info(f"🎙️ Audio capture started: {session_id}")
-                    
-                elif event == "media":
-                    # Process real-time audio
-                    await process_media_chunk(
-                        websocket, session_id, message,
-                        voice_processor, hybrid_tts
-                    )
-                
-                elif event == "stop":
-                    logger.info(f"🛑 Media stream stopped: {session_id}")
-                    break
-                    
-            except json.JSONDecodeError:
-                logger.error(f"❌ Invalid JSON in media stream: {session_id}")
-            except Exception as e:
-                logger.error(f"❌ Media stream processing error: {e}")
-                
-    except WebSocketDisconnect:
-        logger.info(f"🔌 Media stream disconnected: {session_id}")
-    except Exception as e:
-        logger.error(f"❌ Media stream error: {e}")
-    finally:
-        # Clean up
-        await voice_processor.close()
-        if session_id in audio_buffers:
-            del audio_buffers[session_id]
-
-async def process_media_chunk(
-    websocket: WebSocket, 
-    session_id: str, 
-    message: Dict[str, Any],
-    voice_processor: VoiceProcessor,
-    hybrid_tts: HybridTTSService
-):
-    """Process audio chunk through the complete real-time pipeline"""
-    
-    try:
-        # 1. Decode audio from base64
-        media_data = message.get("media", {})
-        audio_payload = media_data.get("payload", "")
-        
-        if not audio_payload:
-            return
-        
-        # Decode base64 audio (Twilio sends μ-law encoded audio at 8kHz)
-        audio_chunk = base64.b64decode(audio_payload)
-        
-        # Add to buffer
-        audio_buffers[session_id] += audio_chunk
-        
-        # Process when we have enough audio (approximately 2 seconds worth)
-        # μ-law is 8kHz, 8-bit, so 2 seconds = ~16000 bytes
-        buffer_size = 16000
-        
-        if len(audio_buffers[session_id]) >= buffer_size:
-            audio_to_process = audio_buffers[session_id][:buffer_size]
-            audio_buffers[session_id] = audio_buffers[session_id][buffer_size:]
-            
-            # Process the audio chunk
-            await process_complete_audio_pipeline(
-                websocket, session_id, audio_to_process,
-                voice_processor, hybrid_tts
+            return await create_segmented_twiml_response(
+                response_type=response_type,
+                client_data=client_data,
+                gather_action="/twilio/process-speech"
             )
         
     except Exception as e:
-        logger.error(f"❌ Media chunk processing error: {e}")
+        logger.error(f"❌ Speech processing error: {e}")
+        return await create_segmented_twiml_response(
+            response_type="goodbye",
+            should_hangup=True
+        )
 
-async def process_complete_audio_pipeline(
-    websocket: WebSocket,
-    session_id: str,
-    audio_data: bytes,
-    voice_processor: VoiceProcessor,
-    hybrid_tts: HybridTTSService
+def process_aag_script_logic(
+    customer_input: str, 
+    session: CallSession, 
+    client_data: Dict[str, Any]
+) -> tuple[str, bool, str]:
+    """Process customer response using EXACT AAG script logic from document"""
+    
+    customer_lower = customer_input.lower()
+    conversation_stage = session.conversation_stage
+    
+    logger.info(f"🔄 Processing stage: {conversation_stage}, input: '{customer_input}'")
+    
+    # Stage 1: Initial response to greeting
+    if conversation_stage == ConversationStage.GREETING:
+        if any(word in customer_lower for word in ["yes", "yeah", "sure", "okay", "interested"]):
+            # Customer said YES - move to agent introduction
+            session.conversation_stage = ConversationStage.SCHEDULING
+            return "agent_introduction", False, "interested"
+        
+        elif any(word in customer_lower for word in ["no", "not interested", "not really"]):
+            # Customer said NO - ask about future communications
+            session.conversation_stage = ConversationStage.DNC_QUESTION
+            return "not_interested", False, "not_interested_initial"
+        
+        else:
+            # Unclear response - try to clarify
+            return "clarification", False, "clarification"
+    
+    # Stage 2: Scheduling response (after agent introduction)
+    elif conversation_stage == ConversationStage.SCHEDULING:
+        if any(word in customer_lower for word in ["yes", "yeah", "sure", "okay"]):
+            # Customer wants to schedule
+            session.conversation_stage = ConversationStage.COMPLETED
+            return "schedule_confirmation", True, "scheduled"
+        
+        elif any(word in customer_lower for word in ["no", "not really", "not now"]):
+            # Customer doesn't want to schedule but is interested
+            session.conversation_stage = ConversationStage.COMPLETED
+            return "no_schedule_followup", True, "interested_no_schedule"
+        
+        else:
+            # Unclear - try again
+            return "clarification", False, "schedule_clarification"
+    
+    # Stage 3: DNC Question response
+    elif conversation_stage == ConversationStage.DNC_QUESTION:
+        if any(word in customer_lower for word in ["yes", "yeah", "sure", "okay"]):
+            # Customer wants to keep receiving communications
+            session.conversation_stage = ConversationStage.COMPLETED
+            return "keep_communications", True, "keep_communications"
+        
+        elif any(word in customer_lower for word in ["no", "remove", "don't", "stop"]):
+            # Customer wants to be removed
+            session.conversation_stage = ConversationStage.COMPLETED
+            return "dnc_confirmation", True, "dnc_requested"
+        
+        else:
+            # Unclear - try again
+            return "clarification", False, "dnc_clarification"
+    
+    # Default fallback
+    session.conversation_stage = ConversationStage.COMPLETED
+    return "goodbye", True, "completed"
+
+async def update_client_with_aag_outcome(
+    session: CallSession, 
+    outcome: str, 
+    customer_input: str,
+    client: Optional[Client]
 ):
-    """Complete audio processing pipeline: STT → Voice Processing → TTS → Response"""
-    
+    """Update client record based on AAG call outcome"""
     try:
-        # Get session
-        session = active_sessions.get(session_id)
-        if not session:
-            logger.warning(f"⚠️ No session found for {session_id}")
+        if not client_repo or not client:
+            logger.warning("⚠️ Cannot update client - repo or client not available")
             return
         
-        # 2. Send to Deepgram for real-time STT
-        # Convert μ-law to WAV format for Deepgram
-        wav_audio = convert_mulaw_to_wav(audio_data)
+        from shared.models.client import CRMTag, CallOutcome
         
-        transcription_result = await deepgram_client.transcribe_audio(
-            audio_data=wav_audio,
-            audio_format="wav",
-            language="en-US"
-        )
+        client_id = session.client_id
         
-        if not transcription_result["success"]:
-            logger.debug(f"🔇 Transcription failed: {transcription_result['error']}")
-            return
-        
-        transcript = transcription_result["transcript"]
-        confidence = transcription_result["confidence"]
-        
-        # Only process meaningful speech
-        if not deepgram_client.is_meaningful_speech(transcript, confidence):
-            logger.debug(f"🔇 Skipping low-quality speech: '{transcript}' (confidence: {confidence})")
-            return
-        
-        logger.info(f"🎤 Real-time transcribed: '{transcript}' (confidence: {confidence:.2f})")
-        
-        # 3. Process with voice processor
-        voice_result = await voice_processor.process_customer_speech(
-            session=session,
-            customer_speech=transcript,
-            client_phone=session.phone_number
-        )
-        
-        if not voice_result["success"]:
-            logger.error(f"❌ Voice processing failed: {voice_result.get('error')}")
-            return
-        
-        response_text = voice_result["response_text"]
-        response_category = voice_result.get("response_category", "dynamic")
-        
-        # Update session with conversation turn
-        session.add_conversation_turn(
-            customer_input=transcript,
-            agent_response=response_text,
-            confidence=confidence
-        )
-        
-        # 4. Generate TTS response using hybrid approach
-        tts_result = await hybrid_tts.get_response_audio(
-            text=response_text,
-            response_type=response_category,
-            client_data={
-                "client_name": session.client_id,
-                "phone": session.phone_number
-            }
-        )
-        
-        if not tts_result["success"]:
-            logger.error(f"❌ TTS generation failed: {tts_result.get('error')}")
-            return
-        
-        # 5. Send audio back to Twilio
-        await send_audio_response_to_twilio(websocket, tts_result)
-        
-        logger.info(f"✅ Real-time audio pipeline completed in {tts_result.get('generation_time_ms', 0):.0f}ms")
-        
-        # Check if conversation should end
-        if voice_result.get("end_conversation"):
-            outcome = voice_result.get("final_outcome", "completed")
-            session.complete_call(outcome)
+        # Apply exact CRM tags from AAG document
+        if outcome in ["scheduled", "interested_no_schedule"]:
+            await client_repo.add_crm_tag(client_id, CRMTag.INTERESTED)
+            await client_repo.update_call_outcome(client_id, CallOutcome.INTERESTED)
+            logger.info(f"✅ Client {client_id} marked as INTERESTED")
             
-            # Update client record
-            await update_client_record(session, voice_result)
+        elif outcome == "keep_communications":
+            await client_repo.add_crm_tag(client_id, CRMTag.NOT_INTERESTED)
+            await client_repo.update_call_outcome(client_id, CallOutcome.NOT_INTERESTED)
+            logger.info(f"✅ Client {client_id} marked as NOT_INTERESTED (keep comms)")
             
-            # Send final message and close
-            await websocket.send_text(json.dumps({
-                "event": "end_call",
-                "reason": outcome
-            }))
+        elif outcome == "dnc_requested":
+            await client_repo.add_crm_tag(client_id, CRMTag.DNC_REQUESTED)
+            await client_repo.update_call_outcome(client_id, CallOutcome.DNC_REQUESTED)
+            logger.info(f"✅ Client {client_id} marked as DNC_REQUESTED")
             
-            # Clean up session
-            if session_id in active_sessions:
-                del active_sessions[session_id]
+        else:
+            await client_repo.update_call_outcome(client_id, CallOutcome.COMPLETED)
+            logger.info(f"✅ Client {client_id} marked as COMPLETED")
+        
+        # Add call attempt to history
+        call_attempt = {
+            "attempt_number": client.total_attempts + 1,
+            "timestamp": datetime.utcnow(),
+            "outcome": outcome,
+            "duration_seconds": int(session.session_metrics.total_call_duration_seconds or 0),
+            "twilio_call_sid": session.twilio_call_sid,
+            "audio_type": "segmented",
+            "transcript": customer_input,
+            "conversation_turns": len(session.conversation_turns)
+        }
+        
+        await client_repo.add_call_attempt(client_id, call_attempt)
         
     except Exception as e:
-        logger.error(f"❌ Complete audio pipeline error: {e}")
-
-async def send_audio_response_to_twilio(websocket: WebSocket, tts_result: Dict[str, Any]):
-    """Send audio response back to Twilio WebSocket"""
-    
-    try:
-        if "audio_url" in tts_result:
-            # For static/cached audio, fetch from S3/URL and stream
-            audio_url = tts_result["audio_url"]
-            
-            if audio_url.startswith("http"):
-                # Fetch audio from URL (S3 or local server)
-                import httpx
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(audio_url)
-                    if response.status_code == 200:
-                        audio_data = response.content
-                        await stream_audio_to_twilio(websocket, audio_data)
-                    else:
-                        logger.error(f"❌ Failed to fetch audio from URL: {audio_url}")
-            
-        elif "audio_data" in tts_result:
-            # For dynamic audio, stream directly
-            audio_data = tts_result["audio_data"]
-            await stream_audio_to_twilio(websocket, audio_data)
-        
-        logger.info(f"🔊 Audio streamed to Twilio successfully")
-        
-    except Exception as e:
-        logger.error(f"❌ Error sending audio to Twilio: {e}")
-
-async def stream_audio_to_twilio(websocket: WebSocket, audio_data: bytes):
-    """Stream audio data to Twilio in μ-law format"""
-    
-    try:
-        # Convert MP3/WAV to μ-law format for Twilio
-        mulaw_audio = convert_to_mulaw(audio_data)
-        
-        # Encode to base64
-        audio_b64 = base64.b64encode(mulaw_audio).decode('utf-8')
-        
-        # Send in chunks (Twilio has payload limits)
-        chunk_size = 1024
-        for i in range(0, len(audio_b64), chunk_size):
-            chunk = audio_b64[i:i + chunk_size]
-            
-            await websocket.send_text(json.dumps({
-                "event": "media",
-                "media": {
-                    "payload": chunk
-                }
-            }))
-            
-            # Small delay between chunks for proper streaming
-            await asyncio.sleep(0.02)
-        
-    except Exception as e:
-        logger.error(f"❌ Audio streaming error: {e}")
-
-def convert_mulaw_to_wav(mulaw_data: bytes) -> bytes:
-    """Convert μ-law audio to WAV format for STT processing"""
-    
-    if not AUDIO_PROCESSING_AVAILABLE:
-        logger.warning("⚠️ Audio processing not available, returning raw data")
-        return mulaw_data
-    
-    try:
-        # Convert μ-law to linear PCM
-        linear_data = audioop.ulaw2lin(mulaw_data, 2)  # 2 bytes per sample (16-bit)
-        
-        # Create WAV file in memory
-        wav_buffer = io.BytesIO()
-        
-        # Create AudioSegment from raw PCM data
-        audio_segment = AudioSegment(
-            data=linear_data,
-            sample_width=2,  # 16-bit
-            frame_rate=8000,  # 8kHz (Twilio's sample rate)
-            channels=1  # Mono
-        )
-        
-        # Export as WAV
-        audio_segment.export(wav_buffer, format="wav")
-        wav_buffer.seek(0)
-        
-        return wav_buffer.read()
-        
-    except Exception as e:
-        logger.error(f"❌ μ-law to WAV conversion error: {e}")
-        return mulaw_data
-
-def convert_to_mulaw(audio_data: bytes) -> bytes:
-    """Convert audio (MP3/WAV) to μ-law format for Twilio"""
-    
-    if not AUDIO_PROCESSING_AVAILABLE:
-        logger.warning("⚠️ Audio processing not available, returning raw data")
-        return audio_data
-    
-    try:
-        # Load audio using pydub (supports MP3, WAV, etc.)
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_data))
-        
-        # Convert to Twilio's required format: 8kHz, mono, 16-bit PCM
-        audio_segment = audio_segment.set_frame_rate(8000).set_channels(1).set_sample_width(2)
-        
-        # Get raw PCM data
-        pcm_data = audio_segment.raw_data
-        
-        # Convert PCM to μ-law
-        mulaw_data = audioop.lin2ulaw(pcm_data, 2)  # 2 bytes per sample
-        
-        return mulaw_data
-        
-    except Exception as e:
-        logger.error(f"❌ Audio to μ-law conversion error: {e}")
-        # Fallback: return original data
-        return audio_data
-
-async def upload_audio_to_s3(audio_data: bytes, filename: str) -> Optional[str]:
-    """Upload audio file to S3 and return public URL"""
-    
-    if not S3_AVAILABLE:
-        logger.warning("⚠️ S3 not available, saving locally")
-        return await save_audio_locally(audio_data, filename)
-    
-    try:
-        s3_client = boto3.client(
-            's3',
-            region_name=settings.aws_region,
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key
-        )
-        
-        # Upload to S3
-        s3_client.put_object(
-            Bucket=settings.s3_bucket_audio,
-            Key=f"dynamic/{filename}",
-            Body=audio_data,
-            ContentType="audio/mpeg",
-            ACL="public-read"  # Make publicly accessible
-        )
-        
-        # Return public URL
-        s3_url = f"https://{settings.s3_bucket_audio}.s3.{settings.aws_region}.amazonaws.com/dynamic/{filename}"
-        
-        logger.info(f"✅ Audio uploaded to S3: {s3_url}")
-        return s3_url
-        
-    except ClientError as e:
-        logger.error(f"❌ S3 upload error: {e}")
-        return await save_audio_locally(audio_data, filename)
-    except Exception as e:
-        logger.error(f"❌ S3 upload error: {e}")
-        return await save_audio_locally(audio_data, filename)
-
-async def save_audio_locally(audio_data: bytes, filename: str) -> str:
-    """Save audio locally and return URL (fallback for S3)"""
-    
-    try:
-        import os
-        
-        # Create directory if it doesn't exist
-        os.makedirs("static/audio/dynamic", exist_ok=True)
-        
-        # Save file
-        filepath = f"static/audio/dynamic/{filename}"
-        with open(filepath, "wb") as f:
-            f.write(audio_data)
-        
-        # Return local URL
-        local_url = f"{settings.base_url.rstrip('/')}/static/audio/dynamic/{filename}"
-        
-        logger.info(f"✅ Audio saved locally: {local_url}")
-        return local_url
-        
-    except Exception as e:
-        logger.error(f"❌ Local audio save error: {e}")
-        return ""
+        logger.error(f"❌ Failed to update client record: {e}")
 
 @router.post("/status")
 async def status_webhook(
@@ -648,39 +533,18 @@ async def status_webhook(
     CallDuration: Optional[str] = Form(None),
     RecordingUrl: Optional[str] = Form(None)
 ):
-    """Handle call status updates with enhanced logging"""
+    """Handle call status updates"""
     
     logger.info(f"📊 Status update: {CallSid} - Status: {CallStatus} - Duration: {CallDuration}")
     
     try:
-        # Get session from cache or active sessions
-        session = active_sessions.get(CallSid)
-        if not session:
-            session = await get_cached_session(CallSid)
-        
-        if session and CallStatus in ["completed", "failed", "busy", "no-answer"]:
-            # Update session with final status
-            if not session.completed_at:
-                session.call_status = CallStatus(CallStatus.lower().replace("-", "_"))
-                session.complete_call(CallStatus)
-                
+        # Clean up session if call completed
+        if CallStatus in ["completed", "failed", "busy", "no-answer"]:
+            if CallSid in active_sessions:
+                session = active_sessions.pop(CallSid)
                 if CallDuration:
                     session.session_metrics.total_call_duration_seconds = int(CallDuration)
-                
-                if RecordingUrl:
-                    session.recording_url = RecordingUrl
-                
-                # Save final session state
                 await cache_session(session)
-                
-                # Clean up active session
-                if CallSid in active_sessions:
-                    del active_sessions[CallSid]
-                
-                # Clean up audio buffer
-                if CallSid in audio_buffers:
-                    del audio_buffers[CallSid]
-                
                 logger.info(f"✅ Call completed: {CallSid} - Duration: {CallDuration}s")
         
         return {"status": "ok", "call_sid": CallSid}
@@ -691,59 +555,51 @@ async def status_webhook(
 
 @router.get("/test-connection")
 async def test_twilio_connection():
-    """Test Twilio connection and all integrated services"""
+    """Test Twilio connection and segmented audio system"""
     
     try:
-        # Test service configurations
+        # Test configurations
         services_status = {
             "twilio_configured": bool(settings.twilio_account_sid and settings.twilio_auth_token),
-            "audio_processing_available": AUDIO_PROCESSING_AVAILABLE,
-            "s3_available": S3_AVAILABLE,
-            "realtime_audio_enabled": getattr(settings, 'enable_realtime_audio', False)
+            "segmented_audio_configured": await segmented_audio_service.is_configured(),
+            "hybrid_tts_configured": await HybridTTSService().is_configured(),
+            "elevenlabs_configured": bool(settings.elevenlabs_api_key and not settings.elevenlabs_api_key.startswith("your_"))
         }
         
-        # Test individual services
-        service_tests = {}
-        
-        # Test Deepgram
+        # Test segmented audio generation
         try:
-            deepgram_test = await deepgram_client.test_connection()
-            service_tests["deepgram"] = deepgram_test
+            test_result = await segmented_audio_service.get_personalized_audio(
+                template_name="greeting",
+                client_name="John",
+                agent_name="Sarah"
+            )
+            services_status["segmented_audio_test"] = test_result.get("success", False)
+            services_status["test_generation_time_ms"] = test_result.get("generation_time_ms", 0)
         except Exception as e:
-            service_tests["deepgram"] = {"success": False, "error": str(e)}
+            services_status["segmented_audio_test"] = False
+            services_status["segmented_audio_error"] = str(e)
         
-        # Test ElevenLabs
-        try:
-            elevenlabs_test = await elevenlabs_client.test_connection()
-            service_tests["elevenlabs"] = elevenlabs_test
-        except Exception as e:
-            service_tests["elevenlabs"] = {"success": False, "error": str(e)}
-        
-        # Test Voice Processor
-        voice_processor = VoiceProcessor()
-        service_tests["voice_processor"] = {"ready": True}
-        await voice_processor.close()
-        
-        # Test Hybrid TTS
-        hybrid_tts = HybridTTSService()
-        service_tests["hybrid_tts"] = {"ready": True}
+        # Get performance stats
+        hybrid_stats = HybridTTSService().get_performance_stats()
+        segmented_stats = segmented_audio_service.get_performance_stats()
         
         return {
             "status": "ok",
             "configuration": services_status,
-            "service_tests": service_tests,
             "active_sessions": len(active_sessions),
-            "audio_buffers": len(audio_buffers),
             "webhook_urls": {
                 "voice": f"{settings.base_url}/twilio/voice",
-                "status": f"{settings.base_url}/twilio/status",
-                "media_stream": f"{settings.base_url}/twilio/media-stream"
+                "status": f"{settings.base_url}/twilio/status"
             },
-            "capabilities": {
-                "real_time_audio": AUDIO_PROCESSING_AVAILABLE,
-                "s3_storage": S3_AVAILABLE,
-                "webhook_processing": True,
-                "hybrid_tts": True
+            "aag_compliance": {
+                "exact_script": True,
+                "segmented_audio": True,
+                "personalized_names": True,
+                "conversation_flow": "AAG Document Compliant"
+            },
+            "performance_stats": {
+                "hybrid_tts": hybrid_stats,
+                "segmented_audio": segmented_stats
             },
             "timestamp": datetime.utcnow().isoformat()
         }

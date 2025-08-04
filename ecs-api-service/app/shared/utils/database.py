@@ -151,16 +151,19 @@ class ClientRepository:
             return None
     
     async def get_client_by_phone(self, phone: str) -> Optional[Client]:
-        """Get client by phone number"""
         try:
             doc = await self.db.clients.find_one({"client.phone": phone})
             if doc:
-                doc["id"] = str(doc["_id"])
+                doc["id"] = str(doc["_id"])  # Convert ObjectId to string
+                del doc["_id"]  # Remove original _id
                 return Client(**doc)
             return None
         except Exception as e:
             logger.error(f"Failed to get client by phone {phone}: {e}")
             return None
+
+
+    
     
     async def update_client(self, client_id: str, updates: Dict[str, Any]) -> bool:
         """Update client record"""

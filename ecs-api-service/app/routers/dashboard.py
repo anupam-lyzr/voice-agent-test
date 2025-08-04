@@ -474,6 +474,50 @@ async def initiate_test_call(call_request: TestCallRequest):
         logger.error(f"❌ Test call error: {e}")
         raise HTTPException(500, f"Test call failed: {str(e)}")
 
+@router.get("/active-calls")
+async def get_active_calls():
+    """Get currently active calls"""
+    try:
+        from routers.twilio import active_sessions
+        
+        active_calls = []
+        for call_sid, session in active_sessions.items():
+            active_calls.append({
+                "call_sid": call_sid,
+                "session_id": session.session_id,
+                "client_phone": session.phone_number,
+                "status": session.call_status.value if session.call_status else "in_progress",
+                "started_at": session.started_at.isoformat() if session.started_at else None,
+            })
+        
+        return {"active_calls": active_calls, "total_active": len(active_calls)}
+    except Exception as e:
+        return {"active_calls": [], "total_active": 0, "error": str(e)}
+
+@router.get("/call-status/{call_sid}")
+async def get_call_status(call_sid: str):
+    """Get status of specific call"""
+    try:
+        from routers.twilio import active_sessions
+        from shared.utils.redis_client import get_cached_session
+        
+        session = active_sessions.get(call_sid) or await get_cached_session(call_sid)
+        
+        if session:
+            return {
+                "call_sid": call_sid,
+                "session_id": session.session_id,
+                "status": session.call_status.value if session.call_status else "unknown",
+                "client_phone": session.phone_number,
+            }
+        else:
+            raise HTTPException(404, f"Call session not found: {call_sid}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+        
+           
 @router.delete("/test-clients/{client_id}")
 async def delete_test_client(client_id: str):
     """Delete test client using existing repository"""

@@ -1,0 +1,86 @@
+{
+  "generated_at": "77202.609",
+  "voice_id": "xtENCNNHEgtE8xBjLMt0",
+  "voice_settings": {
+    "stability": 0.55,
+    "use_speaker_boost": true,
+    "similarity_boost": 0.7,
+    "style": 0.19999999999999996,
+    "speed": 0.8700000000000001
+  },
+  "segments": {
+    "count": 13,
+    "files": [
+      "greeting_start",
+      "greeting_middle",
+      "agent_intro_start",
+      "agent_intro_middle",
+      "not_interested_start",
+      "schedule_start",
+      "schedule_middle",
+      "no_schedule_start",
+      "no_schedule_middle",
+      "dnc_confirmation",
+      "keep_communications",
+      "goodbye",
+      "clarification"
+    ]
+  },
+  "client_names": {
+    "count": 20,
+    "files": [
+      "john",
+      "jane",
+      "michael",
+      "sarah",
+      "david",
+      "lisa",
+      "robert",
+      "jennifer",
+      "william",
+      "patricia",
+      "james",
+      "elizabeth",
+      "christopher",
+      "linda",
+      "daniel",
+      "barbara",
+      "matthew",
+      "susan",
+      "anthony",
+      "jessica"
+    ]
+  },
+  "agent_names": {
+    "count": 5,
+    "files": [
+      "anthony_fracchia",
+      "lashawn_boyd",
+      "india_watson",
+      "hineth_pettway",
+      "keith_braswell"
+    ]
+  },
+  "concatenation_examples": {
+    "greeting": [
+      "greeting_start",
+      "[client_name]",
+      "greeting_middle"
+    ],
+    "agent_intro": [
+      "agent_intro_start",
+      "[agent_name]",
+      "agent_intro_middle"
+    ],
+    "schedule": [
+      "schedule_start",
+      "[agent_name]",
+      "schedule_middle"
+    ],
+    "no_schedule": [
+      "no_schedule_start",
+      "[agent_name]",
+      "no_schedule_middle"
+    ]
+  }
+}

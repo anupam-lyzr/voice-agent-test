@@ -30,10 +30,13 @@ services:
 
   # API Service (minimal for now)
   api-service:
-    build: 
+    build:
       context: ./ecs-api-service
       dockerfile: Dockerfile
     container_name: voice-agent-api
+    volumes:
+      - ./ecs-api-service/audio-generation:/app/audio-generation
+      - ./ecs-api-service/static:/app/static
     ports:
       - "8000:8000"
     env_file:

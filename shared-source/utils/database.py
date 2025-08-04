@@ -150,17 +150,17 @@ class ClientRepository:
             logger.error(f"Failed to get client by ID {client_id}: {e}")
             return None
     
-    async def get_client_by_phone(self, phone: str) -> Optional[Client]:
-        """Get client by phone number"""
-        try:
-            doc = await self.db.clients.find_one({"client.phone": phone})
-            if doc:
-                doc["id"] = str(doc["_id"])
-                return Client(**doc)
-            return None
-        except Exception as e:
-            logger.error(f"Failed to get client by phone {phone}: {e}")
-            return None
+async def get_client_by_phone(self, phone: str) -> Optional[Client]:
+    try:
+        doc = await self.db.clients.find_one({"client.phone": phone})
+        if doc:
+            doc["id"] = str(doc["_id"])  # Add this line
+            del doc["_id"]  # Add this line
+            return Client(**doc)
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get client by phone {phone}: {e}")
+        return None
     
     async def update_client(self, client_id: str, updates: Dict[str, Any]) -> bool:
         """Update client record"""
@@ -741,11 +741,11 @@ async def close_database():
     logger.info("Database connection closed")
 
 # Utility functions for easy access
-async def get_client_by_phone(phone: str) -> Optional[Client]:
-    """Get client by phone number"""
-    if not client_repo:
-        await init_database()
-    return await client_repo.get_client_by_phone(phone)
+# async def get_client_by_phone(phone: str) -> Optional[Client]:
+#     """Get client by phone number"""
+#     if not client_repo:
+#         await init_database()
+#     return await client_repo.get_client_by_phone(phone)
 
 async def save_call_session(session: CallSession) -> bool:
     """Save call session"""
