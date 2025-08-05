@@ -17,7 +17,9 @@ class CallStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     BUSY = "busy"
-    NO_ANSWER = "no_answer"
+    PENDING = "pending"
+    NO_ANSWER = "no-answer"
+    CANCELED = "canceled"
 
 class ConversationStage(str, Enum):
     """Current stage of the conversation"""
@@ -27,12 +29,19 @@ class ConversationStage(str, Enum):
     DNC_QUESTION = "dnc_question"
     CLOSING = "closing"
     COMPLETED = "completed"
+    QUALIFICATION = "qualification"
+    CONFIRMATION = "confirmation"
+    OBJECTION_HANDLING = "objection_handling"
+    GOODBYE = "goodbye"
+    ERROR = "error"
 
 class ResponseType(str, Enum):
     """Type of response being used"""
     STATIC_AUDIO = "static_audio"
     DYNAMIC_TTS = "dynamic_tts"
     HYBRID = "hybrid"
+    STATIC = "static"
+    DYNAMIC = "dynamic"
 
 class ConversationTurn(BaseModel):
     """Individual turn in the conversation"""
@@ -56,7 +65,8 @@ class ConversationTurn(BaseModel):
     
     # Performance metrics
     total_turn_time_ms: Optional[float] = Field(None, description="Total time for complete turn")
-    
+    processing_time_ms: int = 0
+
     # Conversation context
     conversation_stage: ConversationStage = Field(..., description="Stage when turn occurred")
     customer_intent: Optional[str] = Field(None, description="Detected customer intent")
@@ -95,37 +105,36 @@ class CallSession(BaseModel):
     call_status: CallStatus = Field(default=CallStatus.INITIATED, description="Current call status")
     phone_number: str = Field(..., description="Client phone number")
     direction: str = Field(default="outbound", description="Call direction")
+    no_speech_count: int = 0
+    # ADD THIS FIELD - This is the missing field causing the error
+    client_data: Dict[str, Any] = Field(default_factory=dict, description="Client information for personalization")
     
     # Conversation state
     conversation_stage: ConversationStage = Field(default=ConversationStage.GREETING, description="Current conversation stage")
     conversation_turns: List[ConversationTurn] = Field(default_factory=list, description="All conversation turns")
     current_turn_number: int = Field(default=0, description="Current turn number")
     
-    # Context and memory
-    conversation_context: Dict[str, Any] = Field(default_factory=dict, description="Conversation context")
-    customer_preferences: Dict[str, Any] = Field(default_factory=dict, description="Customer preferences discovered")
-    detected_intents: List[str] = Field(default_factory=list, description="All detected customer intents")
-    
-    # LYZR Agent details
-    lyzr_agent_id: str = Field(..., description="LYZR conversation agent ID")
+    # LYZR integration
+    lyzr_agent_id: str = Field(..., description="LYZR agent ID for conversations")
     lyzr_session_id: str = Field(..., description="LYZR session ID")
     
-    # Performance tracking
-    session_metrics: SessionMetrics = Field(default_factory=SessionMetrics, description="Session performance metrics")
-    
     # Timing
-    started_at: datetime = Field(default_factory=datetime.utcnow, description="Session start time")
+    started_at: Optional[datetime] = Field(default_factory=datetime.utcnow, description="When call started")
     answered_at: Optional[datetime] = Field(None, description="When call was answered")
     completed_at: Optional[datetime] = Field(None, description="When call completed")
     
-    # Results
+    # Call outcome
     final_outcome: Optional[str] = Field(None, description="Final call outcome")
-    customer_interested: Optional[bool] = Field(None, description="Customer interest determination")
-    agent_assigned: Optional[str] = Field(None, description="Agent assigned if interested")
-    meeting_scheduled: Optional[datetime] = Field(None, description="Meeting scheduled time")
+    customer_interested: Optional[bool] = Field(None, description="Whether customer expressed interest")
+    
+    # Metrics and performance
+    session_metrics: SessionMetrics = Field(default_factory=SessionMetrics, description="Performance metrics")
     
     # Error tracking
-    errors: List[Dict[str, Any]] = Field(default_factory=list, description="Errors during session")
+    errors: List[Dict[str, Any]] = Field(default_factory=list, description="Session errors")
+    
+    # Test call flag
+    is_test_call: bool = Field(default=False, description="Whether this is a test call")
     
     def add_conversation_turn(self, turn: ConversationTurn):
         """Add a new conversation turn"""

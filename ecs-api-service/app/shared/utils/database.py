@@ -151,13 +151,43 @@ class ClientRepository:
             return None
     
     async def get_client_by_phone(self, phone: str) -> Optional[Client]:
+        """Get client by phone number with multiple format handling"""
         try:
+            # First try exact match
             doc = await self.db.clients.find_one({"client.phone": phone})
             if doc:
-                doc["id"] = str(doc["_id"])  # Convert ObjectId to string
-                del doc["_id"]  # Remove original _id
+                doc["id"] = str(doc["_id"])
+                del doc["_id"]
                 return Client(**doc)
+            
+            # If no exact match, try normalized versions
+            # Remove all non-digits
+            import re
+            digits_only = re.sub(r'\D', '', phone)
+            
+            # Try different formats
+            phone_formats = []
+            if len(digits_only) >= 10:
+                # Add +1 prefix if missing (US numbers)
+                if len(digits_only) == 10:
+                    phone_formats = [f"+1{digits_only}", digits_only]
+                elif len(digits_only) == 11 and digits_only.startswith('1'):
+                    phone_formats = [f"+{digits_only}", digits_only[1:]]
+                else:
+                    phone_formats = [f"+{digits_only}", digits_only]
+            
+            # Try each format
+            for format_phone in phone_formats:
+                doc = await self.db.clients.find_one({"client.phone": format_phone})
+                if doc:
+                    doc["id"] = str(doc["_id"])
+                    del doc["_id"]
+                    logger.info(f"✅ Found client with phone format: {format_phone} (original: {phone})")
+                    return Client(**doc)
+            
+            logger.warning(f"⚠️ No client found for phone: {phone} (tried formats: {phone_formats})")
             return None
+            
         except Exception as e:
             logger.error(f"Failed to get client by phone {phone}: {e}")
             return None

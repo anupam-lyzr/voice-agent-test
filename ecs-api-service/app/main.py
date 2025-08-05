@@ -1,5 +1,5 @@
 """
-Voice Agent API Service - Complete Implementation
+Voice Agent API Service - Fixed Import Paths
 Handles Twilio webhooks, dashboard APIs, and real-time voice processing
 """
 
@@ -21,34 +21,79 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import routers with fallback
+# Import routers with better error handling
+twilio_router = None
+dashboard_router = None
+
+# Try multiple import strategies
+import sys
+import os
+
+# Add current directory to Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 try:
     from routers.twilio import router as twilio_router
     from routers.dashboard import router as dashboard_router
     logger.info("✅ Routers imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Router import failed: {e}")
-    # Create fallback routers
-    from fastapi import APIRouter
+except ImportError as import_error:
+    logger.error(f"❌ Router import failed: {import_error}")
+    
+    # Create minimal emergency routers
+    from fastapi import APIRouter, Form
+    from fastapi.responses import Response
+    
     twilio_router = APIRouter(prefix="/twilio", tags=["Twilio"])
     dashboard_router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
     
-    @dashboard_router.get("/test-clients")
-    async def get_test_clients():
-        return {"clients": [], "note": "Router needs to be properly configured"}
+    @twilio_router.post("/voice")
+    async def emergency_voice_webhook(CallSid: str = Form(...)):
+        return Response(
+            content='''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">Hello, thank you for calling. We are experiencing technical difficulties. Please call back later.</Say>
+    <Hangup/>
+</Response>''',
+            media_type="application/xml"
+        )
     
-    @dashboard_router.get("/test-agents") 
-    async def get_test_agents():
-        return {"agents": [], "note": "Router needs to be properly configured"}
+    @twilio_router.post("/status")  
+    async def emergency_status_webhook():
+        return {"status": "ok"}
     
+    @dashboard_router.get("/stats")
+    async def emergency_stats():
+        return {"error": "System initializing", "total_clients": 0}
+        
+    # Add basic endpoints to fallback routers
     @twilio_router.post("/voice")
     async def voice_webhook():
         return Response(
             content='<?xml version="1.0" encoding="UTF-8"?><Response><Say>Hello, thank you for calling.</Say></Response>',
             media_type="application/xml"
         )
+    
+    @twilio_router.post("/status")
+    async def status_webhook():
+        return {"status": "ok"}
+        
+    @twilio_router.get("/test-connection")
+    async def test_connection():
+        return {"status": "ok", "message": "Fallback router active"}
+    
+    @dashboard_router.get("/stats")
+    async def get_stats():
+        return {"message": "Router fallback - needs proper configuration"}
+    
+    @dashboard_router.get("/test-clients")
+    async def get_test_clients():
+        return {"clients": [], "note": "Router needs to be properly configured"}
+        
+        @dashboard_router.get("/test-agents") 
+        async def get_test_agents():
+            return {"agents": [], "note": "Router needs to be properly configured"}
 
-# Try to import shared utilities (fall back if not available)
+# Try to import shared utilities with fallback
 try:
     from shared.config.settings import settings
     from shared.utils.database import init_database, close_database, db_client
@@ -105,17 +150,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️ Settings validation failed: {e}")
     
-    # Log available routes
-    logger.info("🔗 Available endpoints:")
-    logger.info("   GET  /                    - API information")
-    logger.info("   GET  /health              - Health check")
-    logger.info("   GET  /config              - System configuration")
-    logger.info("   POST /twilio/voice        - Twilio voice webhook")
-    logger.info("   POST /twilio/status       - Twilio status webhook")
-    logger.info("   GET  /api/dashboard/stats - Production stats")
-    logger.info("   GET  /api/dashboard/test-clients - Test clients")
-    logger.info("   POST /api/dashboard/test-call - Initiate test call")
-    
+    # Log all available routes after app creation
     yield
     
     logger.info("🛑 Shutting down Voice Agent System...")
@@ -134,41 +169,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Performance monitoring middleware
-@app.middleware("http")
-async def performance_monitor(request: Request, call_next):
-    """Monitor request performance"""
-    start_time = time.time()
-    
-    try:
-        response = await call_next(request)
-        process_time = (time.time() - start_time) * 1000  # Convert to ms
-        response.headers["X-Process-Time"] = f"{process_time:.2f}ms"
-        
-        # Log slow requests
-        if process_time > 1000:  # 1 second threshold
-            logger.warning(f"⚠️ Slow request: {request.url.path} took {process_time:.2f}ms")
-        
-        return response
-    except Exception as e:
-        process_time = (time.time() - start_time) * 1000
-        logger.error(f"❌ Request error on {request.url.path} after {process_time:.2f}ms: {e}")
-        raise
-
-# Error handling middleware
-@app.middleware("http")
-async def error_handler(request: Request, call_next):
-    """Global error handling"""
-    try:
-        return await call_next(request)
-    except Exception as e:
-        logger.error(f"❌ Unhandled error on {request.url.path}: {e}")
-        return Response(
-            content=f'{{"error": "Internal server error", "detail": "{str(e)}", "path": "{request.url.path}"}}',
-            status_code=500,
-            media_type="application/json"
-        )
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -183,28 +183,41 @@ static_dir = os.path.join(os.getcwd(), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Include routers
+# Include routers - CRITICAL: This must happen AFTER app creation
 app.include_router(twilio_router)
 app.include_router(dashboard_router)
 
 logger.info("📍 Routers included successfully")
 
+# Log all routes after including routers
+@app.on_event("startup")
+async def log_routes():
+    """Log all available routes for debugging"""
+    logger.info("🔗 All registered routes:")
+    for route in app.routes:
+        if hasattr(route, 'methods') and hasattr(route, 'path'):
+            methods = list(route.methods)
+            logger.info(f"   {methods} {route.path}")
+
 @app.get("/")
 async def root():
     """Root endpoint with system information"""
+    # Get all registered routes for the response
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'methods') and hasattr(route, 'path'):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods)
+            })
+    
     return {
         "service": "Voice Agent Production System",
         "version": "1.0.0", 
         "status": "running",
         "environment": getattr(settings, 'environment', 'development'),
-        "features": [
-            "Twilio voice webhook handling",
-            "Dashboard API endpoints",
-            "Real-time call processing",
-            "Production statistics",
-            "Testing capabilities",
-            "Performance monitoring"
-        ],
+        "total_routes": len(routes),
+        "routes": routes,
         "endpoints": {
             "health": "/health",
             "config": "/config",
@@ -225,6 +238,9 @@ async def root():
 async def health_check():
     """Health check endpoint with component status"""
     try:
+        # Count registered routes
+        route_count = len([r for r in app.routes if hasattr(r, 'methods')])
+        
         # Check database connection if available
         db_connected = False
         if db_client:
@@ -263,12 +279,13 @@ async def health_check():
             "redis": "connected" if redis_connected else "not_configured",
             "external_apis": external_apis,
             "environment": getattr(settings, 'environment', 'development'),
+            "registered_routes": route_count,
             "routers": ["twilio", "dashboard"]
         }
         
         # Overall health
         health_status = "healthy"
-        if not any(external_apis.values()):
+        if route_count < 5:  # Should have at least 5 routes
             health_status = "degraded"
         
         return {
@@ -276,7 +293,6 @@ async def health_check():
             "timestamp": datetime.utcnow().isoformat(),
             "version": "1.0.0",
             "components": components,
-            "uptime": time.time(),
             "message": "Voice Agent API is running"
         }
         
@@ -289,46 +305,23 @@ async def health_check():
             "message": "Health check failed"
         }
 
-@app.get("/config")
-async def get_config():
-    """Get system configuration (non-sensitive)"""
-    try:
-        config = {
-            "version": "1.0.0",
-            "environment": getattr(settings, 'environment', 'development'),
-            "max_concurrent_calls": getattr(settings, 'max_concurrent_calls', 30),
-            "base_url": os.getenv("BASE_URL", "http://localhost:8000"),
-            "features": {
-                "voice_processing": True,
-                "dashboard": True,
-                "testing": True,
-                "production_stats": True
-            },
-            "api_endpoints": {
-                "voice_webhook": "/twilio/voice",
-                "status_webhook": "/twilio/status",
-                "dashboard_api": "/api/dashboard/",
-                "health_check": "/health"
-            }
-        }
-        
-        # Add webhook URLs if available
-        if hasattr(settings, 'get_webhook_url'):
-            config["webhook_urls"] = {
-                "voice": settings.get_webhook_url("voice"),
-                "status": settings.get_webhook_url("status")
-            }
-        else:
-            config["webhook_urls"] = {
-                "voice": f"{os.getenv('BASE_URL', 'http://localhost:8000')}/twilio/voice",
-                "status": f"{os.getenv('BASE_URL', 'http://localhost:8000')}/twilio/status"
-            }
-        
-        return config
-        
-    except Exception as e:
-        logger.error(f"Config endpoint error: {e}")
-        return {"error": str(e)}
+@app.get("/debug/routes")
+async def debug_routes():
+    """Debug endpoint to see all registered routes"""
+    routes = []
+    for route in app.routes:
+        route_info = {"path": str(route.path)}
+        if hasattr(route, 'methods'):
+            route_info["methods"] = list(route.methods)
+        if hasattr(route, 'name'):
+            route_info["name"] = route.name
+        routes.append(route_info)
+    
+    return {
+        "total_routes": len(routes),
+        "routes": routes,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 if __name__ == "__main__":
     import uvicorn

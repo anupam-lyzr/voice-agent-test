@@ -155,8 +155,31 @@ class Settings(BaseSettings):
         """Check if running in production environment"""
         return self.environment.lower() == "production"
     
+    # def is_business_hours(self) -> bool:
+    #     """Check if current time is within business hours"""
+    #     try:
+    #         tz = pytz.timezone(self.business_timezone)
+    #         now = datetime.now(tz)
+            
+    #         # Check weekday (0=Monday, 6=Sunday)
+    #         if now.weekday() not in self.business_days_list:
+    #             return False
+            
+    #         # Check time
+    #         if now.hour < self.business_start_hour or now.hour >= self.business_end_hour:
+    #             return False
+            
+    #         return True
+    #     except Exception:
+    #         # If timezone fails, default to False for safety
+    #         return False
+
     def is_business_hours(self) -> bool:
         """Check if current time is within business hours"""
+        # For development/testing, always return True
+        if self.environment.lower() == "development":
+            return True
+            
         try:
             tz = pytz.timezone(self.business_timezone)
             now = datetime.now(tz)
@@ -171,7 +194,6 @@ class Settings(BaseSettings):
             
             return True
         except Exception:
-            # If timezone fails, default to False for safety
             return False
     
     def validate_required_settings(self) -> dict:

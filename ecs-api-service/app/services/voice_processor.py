@@ -337,11 +337,71 @@ class VoiceProcessor:
         client_phone: str
     ) -> Dict[str, Any]:
         """Process customer speech - wrapper for process_customer_input"""
+        
+        # Ensure client_data exists in session
+        if not hasattr(session, 'client_data') or not session.client_data:
+            logger.warning(f"⚠️ Session {session.session_id} missing client_data, adding defaults")
+            session.client_data = {
+                "client_name": "there",
+                "first_name": "there", 
+                "agent_name": "your agent",
+                "last_agent": "your agent"
+            }
+        
         return await self.process_customer_input(
             customer_input=customer_speech,
             session=session,
             confidence=0.8
         )
+    async def update_client_record(session, outcome, customer_input, client=None):
+        """Update client record after call completion"""
+        try:
+            # Import here to avoid circular imports
+            from shared.utils.database import client_repo
+            from shared.models.client import CRMTag, CallOutcome
+            
+            if not client_repo or not client:
+                logger.warning("⚠️ Cannot update client - repo or client not available")
+                return
+            
+            client_id = session.client_id
+            
+            # Apply CRM tags based on outcome
+            if outcome in ["scheduled", "interested_no_schedule"]:
+                await client_repo.add_crm_tag(client_id, CRMTag.INTERESTED)
+                await client_repo.update_call_outcome(client_id, CallOutcome.INTERESTED)
+                logger.info(f"✅ Client {client_id} marked as INTERESTED")
+                
+            elif outcome == "keep_communications":
+                await client_repo.add_crm_tag(client_id, CRMTag.NOT_INTERESTED)
+                await client_repo.update_call_outcome(client_id, CallOutcome.NOT_INTERESTED)
+                logger.info(f"✅ Client {client_id} marked as NOT_INTERESTED (keep comms)")
+                
+            elif outcome == "dnc_requested":
+                await client_repo.add_crm_tag(client_id, CRMTag.DNC_REQUESTED)
+                await client_repo.update_call_outcome(client_id, CallOutcome.DNC_REQUESTED)
+                logger.info(f"✅ Client {client_id} marked as DNC_REQUESTED")
+                
+            else:
+                await client_repo.update_call_outcome(client_id, CallOutcome.COMPLETED)
+                logger.info(f"✅ Client {client_id} marked as COMPLETED")
+            
+            # Add call attempt to history
+            call_attempt = {
+                "attempt_number": client.total_attempts + 1,
+                "timestamp": datetime.utcnow(),
+                "outcome": outcome,
+                "duration_seconds": int(session.session_metrics.total_call_duration_seconds or 0),
+                "twilio_call_sid": session.twilio_call_sid,
+                "audio_type": "hybrid",
+                "transcript": customer_input,
+                "conversation_turns": len(session.conversation_turns)
+            }
+            
+            await client_repo.add_call_attempt(client_id, call_attempt)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to update client record: {e}")
 
 # Global instance
 voice_processor = VoiceProcessor()

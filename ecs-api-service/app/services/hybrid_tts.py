@@ -14,7 +14,9 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from shared.config.settings import settings
-from shared.utils.redis_client import response_cache
+# from shared.utils.redis_client import response_cache
+# response_cache will be imported when needed
+response_cache = None
 
 logger = logging.getLogger(__name__)
 
@@ -126,19 +128,23 @@ class HybridTTSService:
             
             # 4. Check cached dynamic responses
             cache_key = self._generate_text_cache_key(text, client_data)
-            if response_cache:
-                cached_url = await response_cache.get_cached_response(cache_key)
-                if cached_url:
-                    generation_time = (time.time() - start_time) * 1000
-                    logger.info(f"💾 Cached TTS served: ({generation_time:.0f}ms)")
-                    
-                    return {
-                        "success": True,
-                        "audio_url": cached_url,
-                        "generation_time_ms": generation_time,
-                        "type": "cached"
-                    }
-            
+            try:
+                from shared.utils.redis_client import response_cache
+                if response_cache:
+                    cached_url = await response_cache.get_cached_response(cache_key)
+                    if cached_url:
+                        generation_time = (time.time() - start_time) * 1000
+                        logger.info(f"💾 Cached TTS served: ({generation_time:.0f}ms)")
+                        
+                        return {
+                            "success": True,
+                            "audio_url": cached_url,
+                            "generation_time_ms": generation_time,
+                            "type": "cached"
+                        }
+            except ImportError:
+                logger.warning("Redis cache not available")
+                
             # 5. Generate dynamic TTS with ElevenLabs
             dynamic_result = await self._generate_dynamic_tts(text, client_data)
             if dynamic_result["success"]:

@@ -3,9 +3,15 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    curl \
+# RUN apt-get update && apt-get install -y \
+#     gcc \
+#     curl \
+#     && rm -rf /var/lib/apt/lists/*
+
+# Install system dependencies - FIXED: Added ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install

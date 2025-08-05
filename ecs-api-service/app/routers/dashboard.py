@@ -41,6 +41,7 @@ async def get_client_repo():
         from shared.utils.database import client_repo, init_database
         
         if client_repo is None:
+            logger.info("Initializing database...")
             await init_database()
             from shared.utils.database import client_repo as repo
             return repo
@@ -48,6 +49,16 @@ async def get_client_repo():
     except Exception as e:
         logger.error(f"Failed to get client repo: {e}")
         return None
+
+async def get_elevenlabs_client():
+    """Get ElevenLabs client"""
+    from services.elevenlabs_client import elevenlabs_client
+    return elevenlabs_client
+
+async def get_deepgram_client():
+    """Get Deepgram client"""  
+    from services.deepgram_client import deepgram_client
+    return deepgram_client
 
 async def get_session_repo():
     """Get session repository (ensures it's initialized)"""
@@ -162,7 +173,7 @@ async def get_call_logs(limit: int = 50):
                 "duration": f"{session.session_metrics.total_call_duration_seconds}s" if session.session_metrics else "unknown",
                 "started_at": session.started_at.isoformat() if session.started_at else None,
                 "completed_at": session.completed_at.isoformat() if session.completed_at else None,
-                "conversation_turns": len(session.conversation_history),
+                "conversation_turns": len(session.conversation_turns),
                 "summary": session.call_summary if hasattr(session, 'call_summary') else None
             })
         
@@ -478,46 +489,125 @@ async def initiate_test_call(call_request: TestCallRequest):
 async def get_active_calls():
     """Get currently active calls"""
     try:
-        from routers.twilio import active_sessions
-        
         active_calls = []
-        for call_sid, session in active_sessions.items():
-            active_calls.append({
-                "call_sid": call_sid,
-                "session_id": session.session_id,
-                "client_phone": session.phone_number,
-                "status": session.call_status.value if session.call_status else "in_progress",
-                "started_at": session.started_at.isoformat() if session.started_at else None,
-            })
         
-        return {"active_calls": active_calls, "total_active": len(active_calls)}
+        # Get from active sessions
+        try:
+            from routers.twilio import active_sessions
+            for call_sid, session in active_sessions.items():
+                active_calls.append({
+                    "call_sid": call_sid,
+                    "session_id": getattr(session, 'session_id', 'unknown'),
+                    "client_phone": getattr(session, 'phone_number', 'unknown'),
+                    "status": session.call_status.value if hasattr(session, 'call_status') and session.call_status else "in_progress",
+                    "started_at": session.started_at.isoformat() if hasattr(session, 'started_at') and session.started_at else None,
+                    "source": "active_sessions"
+                })
+        except ImportError:
+            logger.warning("Could not import active_sessions")
+        
+        return {
+            "active_calls": active_calls, 
+            "total_active": len(active_calls),
+            "timestamp": datetime.utcnow().isoformat()
+        }
     except Exception as e:
+        logger.error(f"Active calls error: {e}")
         return {"active_calls": [], "total_active": 0, "error": str(e)}
+
+# Replace the existing get_call_status function in dashboard.py with this:
 
 @router.get("/call-status/{call_sid}")
 async def get_call_status(call_sid: str):
-    """Get status of specific call"""
+    """Get status of specific call - FIXED for frontend"""
     try:
+        # Try to get from active sessions first
         from routers.twilio import active_sessions
-        from shared.utils.redis_client import get_cached_session
-        
-        session = active_sessions.get(call_sid) or await get_cached_session(call_sid)
+        session = active_sessions.get(call_sid)
         
         if session:
             return {
                 "call_sid": call_sid,
                 "session_id": session.session_id,
-                "status": session.call_status.value if session.call_status else "unknown",
-                "client_phone": session.phone_number,
+                "status": session.call_status.value if hasattr(session, 'call_status') and session.call_status else "in_progress",
+                "client_phone": getattr(session, 'phone_number', 'unknown'),
+                "client_name": session.client_data.get('client_name', 'Unknown') if session.client_data else 'Unknown',
+                "found_in": "active_sessions",
+                "conversation_stage": session.conversation_stage.value if hasattr(session, 'conversation_stage') else "unknown",
+                "turns": len(session.conversation_turns) if hasattr(session, 'conversation_turns') and session.conversation_turns else 0
             }
-        else:
-            raise HTTPException(404, f"Call session not found: {call_sid}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"Error: {str(e)}")
         
-           
+        # Try Redis cache
+        try:
+            from shared.utils.redis_client import get_cached_session
+            cached_session = await get_cached_session(call_sid)
+            if cached_session:
+                return {
+                    "call_sid": call_sid,
+                    "session_id": cached_session.session_id,
+                    "status": "cached",
+                    "client_phone": getattr(cached_session, 'phone_number', 'unknown'),
+                    "client_name": cached_session.client_data.get('client_name', 'Unknown') if cached_session.client_data else 'Unknown',
+                    "found_in": "redis_cache",
+                    "conversation_stage": cached_session.conversation_stage.value if hasattr(cached_session, 'conversation_stage') else "unknown",
+                    "turns": len(cached_session.conversation_turns) if hasattr(cached_session, 'conversation_turns') and cached_session.conversation_turns else 0
+                }
+        except Exception as cache_error:
+            logger.warning(f"Cache lookup failed: {cache_error}")
+        
+        # Try database
+        try:
+            session_repo = await get_session_repo()
+            if session_repo:
+                db_session = await session_repo.get_session(call_sid)
+                if db_session:
+                    return {
+                        "call_sid": call_sid,
+                        "session_id": db_session.session_id,
+                        "status": "completed",
+                        "client_phone": getattr(db_session, 'phone_number', 'unknown'),
+                        "client_name": db_session.client_data.get('client_name', 'Unknown') if db_session.client_data else 'Unknown',
+                        "found_in": "database",
+                        "conversation_stage": db_session.conversation_stage.value if hasattr(db_session, 'conversation_stage') else "completed",
+                        "turns": len(db_session.conversation_turns) if hasattr(db_session, 'conversation_turns') and db_session.conversation_turns else 0
+                    }
+        except Exception as db_error:
+            logger.warning(f"Database lookup failed: {db_error}")
+        
+        # FIXED: Return consistent format for "not found" to prevent frontend crashes
+        return {
+            "call_sid": call_sid,
+            "session_id": "unknown",
+            "status": "not_found", 
+            "client_phone": "unknown",
+            "client_name": "Unknown",
+            "found_in": "none",
+            "conversation_stage": "unknown",
+            "turns": 0,
+            "message": "Call session not found",
+            "suggestions": [
+                "Call may have completed and been cleaned up",
+                "Call SID may be incorrect", 
+                "Session may have expired from cache"
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Call status error: {e}")
+        # FIXED: Return consistent error format
+        return {
+            "call_sid": call_sid,
+            "session_id": "unknown",
+            "status": "error",
+            "client_phone": "unknown", 
+            "client_name": "Unknown",
+            "found_in": "none",
+            "conversation_stage": "unknown",
+            "turns": 0,
+            "error": str(e)
+        }
+
+
 @router.delete("/test-clients/{client_id}")
 async def delete_test_client(client_id: str):
     """Delete test client using existing repository"""

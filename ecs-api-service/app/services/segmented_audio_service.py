@@ -23,24 +23,26 @@ class SegmentedAudioService:
     """Service for concatenating audio segments with real names"""
 
     def __init__(self):
-        if Path("audio-generation/segments").exists():
-            self.base_dir = Path("audio-generation")
-        elif Path("ecs-api-service/audio-generation/segments").exists():
-            self.base_dir = Path("ecs-api-service/audio-generation")
+        # Updated path resolution - check inside app directory first
+        if Path("app/audio-generation/segments").exists():
+            self.base_dir = Path("app/audio-generation")
+        elif Path("audio-generation/segments").exists():
+            self.base_dir = Path("audio-generation")  # fallback
         else:
-            # Fallback to current directory structure
-            self.base_dir = Path("../audio-generation/generated_audio")
-        
+            # Create the directory structure if it doesn't exist
+            self.base_dir = Path("app/audio-generation")
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            
         self.segments_dir = self.base_dir / "segments"
         self.client_names_dir = self.base_dir / "names" / "clients"
         self.agent_names_dir = self.base_dir / "names" / "agents"
         self.cache_dir = self.base_dir / "concatenated_cache"
         self.temp_dir = Path("static/audio/temp")
 
-
-
-
-        # Create directories
+        # Create all directories
+        self.segments_dir.mkdir(parents=True, exist_ok=True)
+        self.client_names_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_names_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         
