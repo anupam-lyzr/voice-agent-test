@@ -1,38 +1,32 @@
+# In your API service Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-# RUN apt-get update && apt-get install -y \
-#     gcc \
-#     curl \
-#     && rm -rf /var/lib/apt/lists/*
-
-# Install system dependencies - FIXED: Added ffmpeg
+# Install dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ .
 
-# Set Python path
-ENV PYTHONPATH="/app"
+# Copy your audio-generation directory with all audio files
+COPY app/audio-generation /app/audio-generation
 
-# Create necessary directories
-RUN mkdir -p static routers services
+# Ensure directories exist
+RUN mkdir -p static/audio/temp \
+    audio-generation/segments \
+    audio-generation/names/clients \
+    audio-generation/names/agents \
+    audio-generation/concatenated_cache
 
-# Expose port
+ENV PYTHONPATH=/app
+
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

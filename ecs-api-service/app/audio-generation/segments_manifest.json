@@ -1,85 +1,90 @@
 {
-  "generated_at": "77202.609",
-  "voice_id": "xtENCNNHEgtE8xBjLMt0",
-  "voice_settings": {
-    "stability": 0.55,
-    "use_speaker_boost": true,
-    "similarity_boost": 0.7,
-    "style": 0.19999999999999996,
-    "speed": 0.8700000000000001
-  },
+  "last_updated": "2025-08-06T09:48:19.531319",
   "segments": {
-    "count": 13,
+    "count": 14,
     "files": [
-      "greeting_start",
-      "greeting_middle",
-      "agent_intro_start",
       "agent_intro_middle",
-      "not_interested_start",
-      "schedule_start",
-      "schedule_middle",
-      "no_schedule_start",
-      "no_schedule_middle",
+      "agent_intro_start",
+      "clarification",
       "dnc_confirmation",
-      "keep_communications",
+      "error",
       "goodbye",
-      "clarification"
+      "greeting_middle",
+      "greeting_start",
+      "keep_communications",
+      "no_schedule_middle",
+      "no_schedule_start",
+      "not_interested_start",
+      "schedule_middle",
+      "schedule_start"
     ]
   },
   "client_names": {
-    "count": 20,
+    "count": 32,
     "files": [
-      "john",
-      "jane",
-      "michael",
-      "sarah",
-      "david",
-      "lisa",
-      "robert",
-      "jennifer",
-      "william",
-      "patricia",
-      "james",
-      "elizabeth",
-      "christopher",
-      "linda",
-      "daniel",
-      "barbara",
-      "matthew",
-      "susan",
+      "andrew",
       "anthony",
-      "jessica"
+      "barbara",
+      "brian",
+      "charles",
+      "christopher",
+      "daniel",
+      "david",
+      "edward",
+      "elizabeth",
+      "george",
+      "james",
+      "jane",
+      "jennifer",
+      "jessica",
+      "john",
+      "joseph",
+      "kenneth",
+      "linda",
+      "lisa",
+      "mary",
+      "matthew",
+      "michael",
+      "patricia",
+      "richard",
+      "robert",
+      "ronald",
+      "sarah",
+      "steven",
+      "susan",
+      "thomas",
+      "william"
     ]
   },
   "agent_names": {
     "count": 5,
     "files": [
       "anthony_fracchia",
-      "lashawn_boyd",
-      "india_watson",
       "hineth_pettway",
-      "keith_braswell"
+      "india_watson",
+      "keith_braswell",
+      "lashawn_boyd"
     ]
   },
-  "concatenation_examples": {
+  "concatenation_templates": {
     "greeting": [
       "greeting_start",
-      "[client_name]",
+      "[CLIENT_NAME]",
       "greeting_middle"
     ],
     "agent_intro": [
       "agent_intro_start",
-      "[agent_name]",
+      "[AGENT_NAME]",
       "agent_intro_middle"
     ],
     "schedule": [
       "schedule_start",
-      "[agent_name]",
+      "[AGENT_NAME]",
       "schedule_middle"
     ],
     "no_schedule": [
       "no_schedule_start",
-      "[agent_name]",
+      "[AGENT_NAME]",
       "no_schedule_middle"
     ]
   }

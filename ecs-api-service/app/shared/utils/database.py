@@ -541,21 +541,20 @@ class ClientRepository:
             logger.error(f"Error updating call outcome: {e}")
 
 
-    async def get_test_clients(self, limit: int = 50) -> List[Client]:
-        """Get all test clients"""
+    async def get_test_clients(self, limit: int = 100) -> List[Client]:
+        """Get test clients"""
         try:
-            cursor = self.db.clients.find({
-                "is_test_client": True
-            }).sort("created_at", -1).limit(limit)
+            cursor = self.db.clients.find(
+                {"is_test_client": True}
+            ).sort("created_at", -1).limit(limit)
             
             clients = []
             async for doc in cursor:
-                doc["id"] = str(doc.pop("_id"))  # Convert ObjectId to string and rename
                 clients.append(Client(**doc))
             
             return clients
         except Exception as e:
-            logger.error(f"Error getting test clients: {e}")
+            logger.error(f"Failed to get test clients: {e}")
             return []
 
     async def delete_client(self, client_id: str) -> bool:

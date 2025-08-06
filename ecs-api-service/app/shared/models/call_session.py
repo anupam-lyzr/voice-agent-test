@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
-
+from .custom_types import PyObjectId
 class CallStatus(str, Enum):
     """Current status of a call session"""
     INITIATED = "initiated"
@@ -97,6 +97,7 @@ class SessionMetrics(BaseModel):
 class CallSession(BaseModel):
     """Real-time call session state"""
     # Session identification
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     session_id: str = Field(..., description="Unique session identifier")
     twilio_call_sid: str = Field(..., description="Twilio call SID")
     client_id: str = Field(..., description="Client MongoDB ID")

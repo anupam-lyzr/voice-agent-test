@@ -1,5 +1,6 @@
+# Core Framework
 fastapi==0.104.1
-uvicorn==0.24.0
+uvicorn[standard]==0.24.0
 pydantic==2.4.2
 pydantic-settings==2.0.3
 python-multipart==0.0.6
@@ -10,15 +11,26 @@ motor==3.3.2
 pymongo==4.6.0
 redis==5.0.1
 
-# External APIs
+# HTTP Client
 httpx==0.25.2
+
+# Twilio for voice calls
 twilio==9.0.4
+
+# AWS (if using S3 for audio storage)
 boto3==1.29.7
+
+# Audio processing
+pydub==0.25.1
+ffmpeg-python==0.2.0
 
 # Utilities
 aiofiles==23.2.0
 orjson==3.9.10
 pytz==2023.3
 
-#audio generation
-pydub==0.25.1
+# For calendar invitations (in worker service)
+icalendar==5.0.11
+
+# Async support
+aioredis==2.0.1

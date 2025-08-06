@@ -150,17 +150,50 @@ class ClientRepository:
             logger.error(f"Failed to get client by ID {client_id}: {e}")
             return None
     
-async def get_client_by_phone(self, phone: str) -> Optional[Client]:
-    try:
-        doc = await self.db.clients.find_one({"client.phone": phone})
-        if doc:
-            doc["id"] = str(doc["_id"])  # Add this line
-            del doc["_id"]  # Add this line
-            return Client(**doc)
-        return None
-    except Exception as e:
-        logger.error(f"Failed to get client by phone {phone}: {e}")
-        return None
+    async def get_client_by_phone(self, phone: str) -> Optional[Client]:
+        """Get client by phone number with multiple format handling"""
+        try:
+            # First try exact match
+            doc = await self.db.clients.find_one({"client.phone": phone})
+            if doc:
+                doc["id"] = str(doc["_id"])
+                del doc["_id"]
+                return Client(**doc)
+            
+            # If no exact match, try normalized versions
+            # Remove all non-digits
+            import re
+            digits_only = re.sub(r'\D', '', phone)
+            
+            # Try different formats
+            phone_formats = []
+            if len(digits_only) >= 10:
+                # Add +1 prefix if missing (US numbers)
+                if len(digits_only) == 10:
+                    phone_formats = [f"+1{digits_only}", digits_only]
+                elif len(digits_only) == 11 and digits_only.startswith('1'):
+                    phone_formats = [f"+{digits_only}", digits_only[1:]]
+                else:
+                    phone_formats = [f"+{digits_only}", digits_only]
+            
+            # Try each format
+            for format_phone in phone_formats:
+                doc = await self.db.clients.find_one({"client.phone": format_phone})
+                if doc:
+                    doc["id"] = str(doc["_id"])
+                    del doc["_id"]
+                    logger.info(f"✅ Found client with phone format: {format_phone} (original: {phone})")
+                    return Client(**doc)
+            
+            logger.warning(f"⚠️ No client found for phone: {phone} (tried formats: {phone_formats})")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get client by phone {phone}: {e}")
+            return None
+
+
+    
     
     async def update_client(self, client_id: str, updates: Dict[str, Any]) -> bool:
         """Update client record"""
@@ -508,21 +541,20 @@ async def get_client_by_phone(self, phone: str) -> Optional[Client]:
             logger.error(f"Error updating call outcome: {e}")
 
 
-    async def get_test_clients(self, limit: int = 50) -> List[Client]:
-        """Get all test clients"""
+    async def get_test_clients(self, limit: int = 100) -> List[Client]:
+        """Get test clients"""
         try:
-            cursor = self.db.clients.find({
-                "is_test_client": True
-            }).sort("created_at", -1).limit(limit)
+            cursor = self.db.clients.find(
+                {"is_test_client": True}
+            ).sort("created_at", -1).limit(limit)
             
             clients = []
             async for doc in cursor:
-                doc["id"] = str(doc.pop("_id"))  # Convert ObjectId to string and rename
                 clients.append(Client(**doc))
             
             return clients
         except Exception as e:
-            logger.error(f"Error getting test clients: {e}")
+            logger.error(f"Failed to get test clients: {e}")
             return []
 
     async def delete_client(self, client_id: str) -> bool:
@@ -741,11 +773,11 @@ async def close_database():
     logger.info("Database connection closed")
 
 # Utility functions for easy access
-# async def get_client_by_phone(phone: str) -> Optional[Client]:
-#     """Get client by phone number"""
-#     if not client_repo:
-#         await init_database()
-#     return await client_repo.get_client_by_phone(phone)
+async def get_client_by_phone(phone: str) -> Optional[Client]:
+    """Get client by phone number"""
+    if not client_repo:
+        await init_database()
+    return await client_repo.get_client_by_phone(phone)
 
 async def save_call_session(session: CallSession) -> bool:
     """Save call session"""

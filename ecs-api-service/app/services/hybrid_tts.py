@@ -1,6 +1,6 @@
 """
-Updated Hybrid TTS Service - Integrated with Segmented Audio
-Combines pre-generated segments with dynamic name insertion for optimal performance
+Updated Hybrid TTS Service - Production Ready
+Handles all response types including email scheduling mentions
 """
 
 import asyncio
@@ -14,14 +14,11 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 from shared.config.settings import settings
-# from shared.utils.redis_client import response_cache
-# response_cache will be imported when needed
-response_cache = None
 
 logger = logging.getLogger(__name__)
 
 class HybridTTSService:
-    """Service that uses segmented audio for personalized responses with real names"""
+    """Service that uses segmented audio for personalized responses"""
     
     def __init__(self):
         # Import segmented audio service
@@ -37,7 +34,7 @@ class HybridTTSService:
         self.dynamic_responses = 0
         self.total_requests = 0
         
-        # Response type mapping for AAG script
+        # Response type mapping for AAG script with email scheduling
         self.response_mapping = {
             # Personalized responses (need concatenation)
             "greeting": {
@@ -86,6 +83,11 @@ class HybridTTSService:
                 "template": "clarification",
                 "needs_client_name": False,
                 "needs_agent_name": False
+            },
+            "error": {
+                "template": "error",
+                "needs_client_name": False,
+                "needs_agent_name": False
             }
         }
     
@@ -114,46 +116,11 @@ class HybridTTSService:
             if detected_type:
                 return await self._get_mapped_response(detected_type, client_data, start_time)
             
-            # 3. Check for simple static responses
-            static_result = await self._try_static_response(text)
-            if static_result["success"]:
-                self.static_responses += 1
-                generation_time = (time.time() - start_time) * 1000
-                
-                return {
-                    **static_result,
-                    "generation_time_ms": generation_time,
-                    "type": "static_segment"
-                }
-            
-            # 4. Check cached dynamic responses
-            cache_key = self._generate_text_cache_key(text, client_data)
-            try:
-                from shared.utils.redis_client import response_cache
-                if response_cache:
-                    cached_url = await response_cache.get_cached_response(cache_key)
-                    if cached_url:
-                        generation_time = (time.time() - start_time) * 1000
-                        logger.info(f"💾 Cached TTS served: ({generation_time:.0f}ms)")
-                        
-                        return {
-                            "success": True,
-                            "audio_url": cached_url,
-                            "generation_time_ms": generation_time,
-                            "type": "cached"
-                        }
-            except ImportError:
-                logger.warning("Redis cache not available")
-                
-            # 5. Generate dynamic TTS with ElevenLabs
+            # 3. Generate dynamic TTS
             dynamic_result = await self._generate_dynamic_tts(text, client_data)
             if dynamic_result["success"]:
                 self.dynamic_responses += 1
                 generation_time = (time.time() - start_time) * 1000
-                
-                # Cache the result
-                if response_cache:
-                    await response_cache.cache_response(cache_key, dynamic_result["audio_url"], expire_seconds=3600)
                 
                 logger.info(f"🎤 Dynamic TTS generated: ({generation_time:.0f}ms)")
                 
@@ -163,7 +130,7 @@ class HybridTTSService:
                     "type": "dynamic"
                 }
             
-            # 6. Final fallback
+            # 4. Final fallback
             logger.warning(f"⚠️ All TTS methods failed for: '{text[:50]}'")
             return {
                 "success": False,
@@ -242,56 +209,35 @@ class HybridTTSService:
         if any(phrase in text_lower for phrase in ["hello", "alex here", "altruis advisor", "open enrollment"]):
             return "greeting"
         
-        # Agent introduction detection
-        if any(phrase in text_lower for phrase in ["looks like", "last agent", "discovery call", "get reacquainted"]):
+        # Agent introduction with email mention
+        if any(phrase in text_lower for phrase in ["send you an email", "available time slots", "choose what works"]):
             return "agent_introduction"
         
         # Schedule confirmation detection
-        if any(phrase in text_lower for phrase in ["check", "calendar", "scheduled", "calendar invitation"]):
+        if any(phrase in text_lower for phrase in ["receive an email", "within the next few minutes", "click on the time"]):
             return "schedule_confirmation"
         
         # No schedule follow-up detection
-        if any(phrase in text_lower for phrase in ["will reach out", "work together", "best next steps"]):
+        if any(phrase in text_lower for phrase in ["make a note", "whenever you're ready"]):
             return "no_schedule_followup"
         
         # Static response detection
-        if any(phrase in text_lower for phrase in ["continue receiving", "communications from our team"]):
+        if any(phrase in text_lower for phrase in ["continue receiving", "occasional health insurance updates"]):
             return "not_interested"
         
         if any(phrase in text_lower for phrase in ["removed from all future", "confirmation email"]):
             return "dnc_confirmation"
         
-        if any(phrase in text_lower for phrase in ["keep you informed", "ever-changing world"]):
+        if any(phrase in text_lower for phrase in ["keep you in the loop", "helpful health insurance"]):
             return "keep_communications"
         
         if any(phrase in text_lower for phrase in ["thank you for your time", "wonderful day"]):
             return "goodbye"
         
-        if any(phrase in text_lower for phrase in ["understand correctly", "yes if you're interested"]):
+        if any(phrase in text_lower for phrase in ["didn't quite catch", "let me clarify", "make sure i understand"]):
             return "clarification"
         
         return None
-    
-    async def _try_static_response(self, text: str) -> Dict[str, Any]:
-        """Try to match with static response segments"""
-        
-        # For short, common responses that don't need personalization
-        static_phrases = {
-            "thank you": "goodbye",
-            "goodbye": "goodbye", 
-            "have a great day": "goodbye",
-            "understood": "dnc_confirmation",
-            "i understand": "not_interested"
-        }
-        
-        text_lower = text.lower().strip()
-        
-        for phrase, template in static_phrases.items():
-            if phrase in text_lower and len(text_lower) < 50:  # Short responses only
-                result = await self.segmented_service.get_personalized_audio(template)
-                return result
-        
-        return {"success": False}
     
     async def _generate_dynamic_tts(
         self, 
@@ -304,53 +250,35 @@ class HybridTTSService:
             return {"success": False, "error": "ElevenLabs API key not configured"}
         
         try:
+            # Import ElevenLabs client
+            from services.elevenlabs_client import elevenlabs_client
+            
             # Clean and optimize text for TTS
             clean_text = self._clean_text_for_tts(text, client_data)
             
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{settings.default_voice_id}"
+            # Generate speech
+            result = await elevenlabs_client.generate_speech(clean_text)
             
-            headers = {
-                "Accept": "audio/mpeg",
-                "Content-Type": "application/json",
-                "xi-api-key": settings.elevenlabs_api_key
-            }
-            
-            data = {
-                "text": clean_text,
-                "model_id": settings.tts_model,
-                "voice_settings": settings.elevenlabs_voice_settings,
-                "output_format": settings.tts_output_format
-            }
-            
-            response = await self.elevenlabs_session.post(url, headers=headers, json=data)
-            
-            if response.status_code == 200:
+            if result.get("success") and result.get("audio_data"):
                 # Save audio file
                 filename = f"dynamic_{uuid.uuid4().hex[:8]}.mp3"
                 
-                if settings.environment == "development":
-                    # Save locally for development
-                    os.makedirs("static/audio/temp", exist_ok=True)
-                    filepath = f"static/audio/temp/{filename}"
-                    
-                    with open(filepath, "wb") as f:
-                        f.write(response.content)
-                    
-                    audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
-                    
-                else:
-                    # TODO: Upload to S3 for production
-                    audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
+                os.makedirs("static/audio/temp", exist_ok=True)
+                filepath = f"static/audio/temp/{filename}"
+                
+                with open(filepath, "wb") as f:
+                    f.write(result["audio_data"])
+                
+                audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
                 
                 return {
                     "success": True,
                     "audio_url": audio_url,
-                    "file_size": len(response.content)
+                    "file_size": len(result["audio_data"])
                 }
             
             else:
-                logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
-                return {"success": False, "error": f"API error: {response.status_code}"}
+                return {"success": False, "error": "TTS generation failed"}
                 
         except Exception as e:
             logger.error(f"Dynamic TTS generation error: {e}")
@@ -392,26 +320,28 @@ class HybridTTSService:
         client_name: Optional[str],
         agent_name: Optional[str]
     ) -> Optional[str]:
-        """Build full text using AAG script templates"""
+        """Build full text using AAG script templates with email scheduling"""
         
         templates = {
             "greeting": f"Hello {client_name or '[NAME]'}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
             
-            "agent_introduction": f"Great, looks like {agent_name or '[AGENT]'} was the last agent you worked with here at Altruis. Would you like to schedule a quick 15-minute discovery call with them to get reacquainted? A simple Yes or No will do!",
+            "agent_introduction": f"Wonderful! I see that {agent_name or '[AGENT]'} was the last agent who helped you. I'd love to connect you with them again. We'll send you an email shortly with {agent_name or '[AGENT]'}'s available time slots, and you can choose what works best for your schedule. Does that sound good?",
             
-            "schedule_confirmation": f"Great, give me a moment while I check {agent_name or '[AGENT]'}'s calendar... Perfect! I've scheduled a 15-minute discovery call for you. You should receive a calendar invitation shortly. Thank you and have a wonderful day!",
+            "schedule_confirmation": f"Perfect! You'll receive an email within the next few minutes with {agent_name or '[AGENT]'}'s calendar. Simply click on the time that works best for you, and it will automatically schedule your 15-minute discovery call. Thank you so much for your time today, and have a wonderful day!",
             
-            "no_schedule_followup": f"No problem, {agent_name or '[AGENT]'} will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!",
+            "no_schedule_followup": f"I completely understand. {agent_name or '[AGENT]'} will make a note of our conversation, and we'll be here whenever you're ready to explore your options. Thank you for your time today. Have a wonderful day!",
             
-            "not_interested": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
+            "not_interested": "No problem at all! Would you like to continue receiving occasional health insurance updates from our team? We promise to keep them informative and not overwhelming. A simple yes or no will do!",
             
-            "dnc_confirmation": "Understood, we will make sure you are removed from all future communications and send you a confirmation email once that is done. Our contact details will be in that email as well, so if you do change your mind in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
+            "dnc_confirmation": "I completely understand. I'll make sure you're removed from all future calls right away. You'll receive a confirmation email shortly. Our contact information will be in that email if you ever change your mind - remember, our service is always free. Have a wonderful day!",
             
-            "keep_communications": "Great, we're happy to keep you informed throughout the year regarding the ever-changing world of health insurance. If you'd like to connect with one of our insurance experts in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
+            "keep_communications": "Great! We'll keep you in the loop with helpful health insurance updates throughout the year. If you ever need assistance, just reach out - we're always here to help, and our service is always free. Thank you for your time today!",
             
             "goodbye": "Thank you for your time today. Have a wonderful day!",
             
-            "clarification": "I want to make sure I understand correctly. Can we help service you this year during Open Enrollment? Please say Yes if you're interested, or No if you're not interested."
+            "clarification": "I apologize, I didn't quite catch that. Would you be interested in reviewing your health insurance options for this year's open enrollment? A simple yes or no would be great.",
+            
+            "error": "I apologize, I'm having some technical difficulties. Thank you for your patience."
         }
         
         return templates.get(response_type)
@@ -438,15 +368,7 @@ class HybridTTSService:
             text += '.'
         
         return text.strip()
-    
-    def _generate_text_cache_key(self, text: str, client_data: Optional[Dict[str, Any]] = None) -> str:
-        """Generate cache key for text-based responses"""
-        content = text
-        if client_data:
-            content += str(sorted(client_data.items()))
-        
-        return hashlib.md5(content.encode()).hexdigest()
-    
+
     async def is_configured(self) -> bool:
         """Check if hybrid TTS service is configured"""
         try:
@@ -478,9 +400,12 @@ class HybridTTSService:
             "segmented_responses": self.segmented_responses,
             "static_responses": self.static_responses,
             "dynamic_responses": self.dynamic_responses,
-            "segmented_rate": segmented_rate,
-            "static_rate": static_rate,
-            "dynamic_rate": dynamic_rate,
+            "segmented_rate": round(segmented_rate, 1),
+            "static_rate": round(static_rate, 1),
+            "dynamic_rate": round(dynamic_rate, 1),
             "performance_improvement": f"{segmented_rate + static_rate:.1f}% faster responses via segmented audio",
             "segmented_service_stats": segmented_stats
         }
+
+# Global instance
+hybrid_tts = HybridTTSService()

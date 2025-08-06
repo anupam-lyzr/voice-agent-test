@@ -1,6 +1,6 @@
 """
-Segmented Audio Service
-Handles real-time audio concatenation for personalized responses with actual client/agent names
+Segmented Audio Service - Production Ready
+Handles real-time audio concatenation for personalized responses
 """
 
 import asyncio
@@ -15,7 +15,6 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from shared.config.settings import settings
-from shared.utils.redis_client import response_cache
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +22,11 @@ class SegmentedAudioService:
     """Service for concatenating audio segments with real names"""
 
     def __init__(self):
-        # Updated path resolution - check inside app directory first
-        if Path("app/audio-generation/segments").exists():
+        # Use the correct path based on your structure
+        self.base_dir = Path("audio-generation")
+        if not self.base_dir.exists():
+            # Try app/audio-generation if the first path doesn't exist
             self.base_dir = Path("app/audio-generation")
-        elif Path("audio-generation/segments").exists():
-            self.base_dir = Path("audio-generation")  # fallback
-        else:
-            # Create the directory structure if it doesn't exist
-            self.base_dir = Path("app/audio-generation")
-            self.base_dir.mkdir(parents=True, exist_ok=True)
             
         self.segments_dir = self.base_dir / "segments"
         self.client_names_dir = self.base_dir / "names" / "clients"
@@ -39,19 +34,18 @@ class SegmentedAudioService:
         self.cache_dir = self.base_dir / "concatenated_cache"
         self.temp_dir = Path("static/audio/temp")
 
-        # Create all directories
-        self.segments_dir.mkdir(parents=True, exist_ok=True)
-        self.client_names_dir.mkdir(parents=True, exist_ok=True)
-        self.agent_names_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure temp directory exists
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load manifest if exists
+        self.manifest = self._load_manifest()
         
         # Performance tracking
         self.concatenations_count = 0
         self.cache_hits = 0
         self.generation_time_total = 0.0
         
-        # Audio concatenation templates
+        # Updated templates based on your audio files
         self.templates = {
             "greeting": {
                 "segments": ["greeting_start", "[CLIENT_NAME]", "greeting_middle"],
@@ -92,6 +86,19 @@ class SegmentedAudioService:
             }
         }
     
+    def _load_manifest(self) -> Dict[str, Any]:
+        """Load segments manifest if available"""
+        try:
+            manifest_path = self.base_dir / "segments_manifest.json"
+            if manifest_path.exists():
+                import json
+                with open(manifest_path, 'r') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.warning(f"Could not load manifest: {e}")
+            return {}
+    
     async def get_personalized_audio(
         self, 
         template_name: str, 
@@ -119,18 +126,27 @@ class SegmentedAudioService:
             # Generate cache key
             cache_key = self._generate_cache_key(template_name, client_name, agent_name)
             
-            # Check cache first
-            if response_cache:
-                cached_url = await response_cache.get_cached_response(cache_key)
-                if cached_url and self._audio_file_exists(cached_url):
-                    self.cache_hits += 1
-                    logger.info(f"⚡ Cache hit for: {template_name}")
-                    return {
-                        "success": True,
-                        "audio_url": cached_url,
-                        "generation_time_ms": int((time.time() - start_time) * 1000),
-                        "source": "cache"
-                    }
+            # Check local cache first (concatenated_cache directory)
+            cached_file = self.cache_dir / f"{cache_key}.mp3"
+            if cached_file.exists():
+                # Copy to temp for serving
+                temp_filename = f"cached_{cache_key[:12]}_{uuid.uuid4().hex[:8]}.mp3"
+                temp_path = self.temp_dir / temp_filename
+                
+                import shutil
+                shutil.copy2(cached_file, temp_path)
+                
+                audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{temp_filename}"
+                
+                self.cache_hits += 1
+                logger.info(f"⚡ Cache hit for: {template_name}")
+                
+                return {
+                    "success": True,
+                    "audio_url": audio_url,
+                    "generation_time_ms": int((time.time() - start_time) * 1000),
+                    "source": "cache"
+                }
             
             # Generate audio by concatenation
             audio_url = await self._concatenate_segments(
@@ -141,10 +157,6 @@ class SegmentedAudioService:
             )
             
             if audio_url:
-                # Cache the result
-                if response_cache:
-                    await response_cache.cache_response(cache_key, audio_url, ttl=86400)  # 24 hours
-                
                 self.concatenations_count += 1
                 generation_time = int((time.time() - start_time) * 1000)
                 self.generation_time_total += generation_time
@@ -179,7 +191,6 @@ class SegmentedAudioService:
                 temp_filename = f"static_{segment_name}_{uuid.uuid4().hex[:8]}.mp3"
                 temp_path = self.temp_dir / temp_filename
                 
-                # Copy file
                 import shutil
                 shutil.copy2(audio_file, temp_path)
                 
@@ -251,6 +262,11 @@ class SegmentedAudioService:
             success = await self._ffmpeg_concatenate(audio_files, str(output_path))
             
             if success:
+                # Also save to cache
+                cache_path = self.cache_dir / f"{cache_key}.mp3"
+                import shutil
+                shutil.copy2(output_path, cache_path)
+                
                 audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{output_filename}"
                 return audio_url
             else:
@@ -265,8 +281,13 @@ class SegmentedAudioService:
         
         try:
             if name_type == "client":
-                # Look for client name audio
+                # Look for client name audio - try exact match first
                 name_file = self.client_names_dir / f"{name.lower()}.mp3"
+                
+                if not name_file.exists():
+                    # Try first name only
+                    first_name = name.split()[0].lower()
+                    name_file = self.client_names_dir / f"{first_name}.mp3"
                 
                 if name_file.exists():
                     return str(name_file)
@@ -276,7 +297,7 @@ class SegmentedAudioService:
                     return await self._generate_name_audio(name, "client")
             
             elif name_type == "agent":
-                # Look for agent name audio
+                # Look for agent name audio - handle your specific agent names
                 agent_filename = name.lower().replace(' ', '_').replace('.', '')
                 name_file = self.agent_names_dir / f"{agent_filename}.mp3"
                 
@@ -334,18 +355,21 @@ class SegmentedAudioService:
             
             with open(concat_file, 'w') as f:
                 for audio_file in audio_files:
+                    # Use absolute paths to avoid issues
+                    abs_path = Path(audio_file).absolute()
                     # Escape path for ffmpeg
-                    escaped_path = audio_file.replace("'", "'\"'\"'")
+                    escaped_path = str(abs_path).replace("'", "'\"'\"'")
                     f.write(f"file '{escaped_path}'\n")
             
-            # Run ffmpeg concatenation
+            # Run ffmpeg concatenation with better error handling
             cmd = [
                 'ffmpeg', '-y',  # -y to overwrite output file
                 '-f', 'concat',
                 '-safe', '0',
-                '-i', str(concat_file),
+                '-i', str(concat_file.absolute()),
                 '-c', 'copy',  # Copy without re-encoding for speed
-                output_path
+                '-loglevel', 'error',  # Only show errors
+                str(Path(output_path).absolute())
             ]
             
             # Run async subprocess
@@ -360,11 +384,12 @@ class SegmentedAudioService:
             # Clean up concat file
             concat_file.unlink(missing_ok=True)
             
-            if process.returncode == 0:
+            if process.returncode == 0 and Path(output_path).exists():
                 logger.debug(f"✅ FFmpeg concatenation successful: {output_path}")
                 return True
             else:
-                logger.error(f"❌ FFmpeg concatenation failed: {stderr.decode()}")
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                logger.error(f"❌ FFmpeg concatenation failed: {error_msg}")
                 return False
         
         except Exception as e:
@@ -380,7 +405,7 @@ class SegmentedAudioService:
         """Fallback to dynamic TTS generation"""
         
         try:
-            # Import hybrid TTS for fallback
+            # Import ElevenLabs client
             from services.elevenlabs_client import elevenlabs_client
             
             # Create full text based on template
@@ -415,9 +440,8 @@ class SegmentedAudioService:
             return {"success": False, "error": str(e)}
     
     def _build_full_text(self, template_name: str, client_name: Optional[str], agent_name: Optional[str]) -> Optional[str]:
-        """Build full text for dynamic TTS"""
+        """Build full text for dynamic TTS based on AAG script"""
         
-        # AAG script templates for fallback
         templates = {
             "greeting": f"Hello {client_name or '[NAME]'}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
             
@@ -425,7 +449,17 @@ class SegmentedAudioService:
             
             "schedule_confirmation": f"Great, give me a moment while I check {agent_name or '[AGENT]'}'s calendar... Perfect! I've scheduled a 15-minute discovery call for you. You should receive a calendar invitation shortly. Thank you and have a wonderful day!",
             
-            "no_schedule_followup": f"No problem, {agent_name or '[AGENT]'} will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!"
+            "no_schedule_followup": f"No problem, {agent_name or '[AGENT]'} will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!",
+            
+            "not_interested": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
+            
+            "dnc_confirmation": "Understood, we will make sure you are removed from all future communications and send you a confirmation email once that is done. Our contact details will be in that email as well, so if you do change your mind in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
+            
+            "keep_communications": "Great, we're happy to keep you informed throughout the year regarding the ever-changing world of health insurance. If you'd like to connect with one of our insurance experts in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
+            
+            "goodbye": "Thank you for your time today. Have a wonderful day!",
+            
+            "clarification": "I want to make sure I understand correctly. Can we help service you this year during Open Enrollment? Please say Yes if you're interested, or No if you're not interested."
         }
         
         return templates.get(template_name)
@@ -445,18 +479,6 @@ class SegmentedAudioService:
         
         # Generate hash for consistent key length
         return hashlib.md5(cache_key.encode()).hexdigest()
-    
-    def _audio_file_exists(self, audio_url: str) -> bool:
-        """Check if audio file exists from URL"""
-        try:
-            # Extract filename from URL
-            if "/static/audio/temp/" in audio_url:
-                filename = audio_url.split("/static/audio/temp/")[-1]
-                file_path = self.temp_dir / filename
-                return file_path.exists()
-            return False
-        except Exception:
-            return False
     
     async def cleanup_old_files(self, max_age_hours: int = 24):
         """Clean up old temporary audio files"""
@@ -487,22 +509,36 @@ class SegmentedAudioService:
         """Get performance statistics"""
         
         if self.concatenations_count == 0:
-            return {"no_requests": True}
+            return {
+                "total_concatenations": 0,
+                "cache_hits": 0,
+                "cache_hit_rate_percent": 0,
+                "avg_generation_time_ms": 0,
+                "performance_improvement": "No requests yet",
+                "directories": {
+                    "segments": len(list(self.segments_dir.glob("*.mp3"))) if self.segments_dir.exists() else 0,
+                    "client_names": len(list(self.client_names_dir.glob("*.mp3"))) if self.client_names_dir.exists() else 0,
+                    "agent_names": len(list(self.agent_names_dir.glob("*.mp3"))) if self.agent_names_dir.exists() else 0,
+                    "temp_files": len(list(self.temp_dir.glob("*.mp3"))) if self.temp_dir.exists() else 0,
+                    "cached_files": len(list(self.cache_dir.glob("*.mp3"))) if self.cache_dir.exists() else 0
+                }
+            }
         
         avg_generation_time = self.generation_time_total / self.concatenations_count
-        cache_hit_rate = (self.cache_hits / (self.concatenations_count + self.cache_hits)) * 100
+        cache_hit_rate = (self.cache_hits / (self.concatenations_count + self.cache_hits)) * 100 if (self.concatenations_count + self.cache_hits) > 0 else 0
         
         return {
             "total_concatenations": self.concatenations_count,
             "cache_hits": self.cache_hits,
-            "cache_hit_rate_percent": cache_hit_rate,
-            "avg_generation_time_ms": avg_generation_time,
+            "cache_hit_rate_percent": round(cache_hit_rate, 1),
+            "avg_generation_time_ms": round(avg_generation_time, 1),
             "performance_improvement": f"{cache_hit_rate:.1f}% faster responses via caching",
             "directories": {
                 "segments": len(list(self.segments_dir.glob("*.mp3"))) if self.segments_dir.exists() else 0,
                 "client_names": len(list(self.client_names_dir.glob("*.mp3"))) if self.client_names_dir.exists() else 0,
                 "agent_names": len(list(self.agent_names_dir.glob("*.mp3"))) if self.agent_names_dir.exists() else 0,
-                "temp_files": len(list(self.temp_dir.glob("*.mp3"))) if self.temp_dir.exists() else 0
+                "temp_files": len(list(self.temp_dir.glob("*.mp3"))) if self.temp_dir.exists() else 0,
+                "cached_files": len(list(self.cache_dir.glob("*.mp3"))) if self.cache_dir.exists() else 0
             }
         }
     
@@ -511,14 +547,21 @@ class SegmentedAudioService:
         try:
             # Check if segments directory exists and has files
             if not self.segments_dir.exists():
+                logger.warning(f"Segments directory not found: {self.segments_dir}")
                 return False
             
-            # Check for essential segments
-            essential_segments = ["greeting_start", "greeting_middle", "goodbye"]
+            # Check for essential segments based on your files
+            essential_segments = ["greeting_start", "greeting_middle", "goodbye", "agent_intro_start", "agent_intro_middle"]
+            missing_segments = []
+            
             for segment in essential_segments:
                 segment_file = self.segments_dir / f"{segment}.mp3"
                 if not segment_file.exists():
-                    return False
+                    missing_segments.append(segment)
+            
+            if missing_segments:
+                logger.warning(f"Missing essential segments: {missing_segments}")
+                return False
             
             # Check for ffmpeg
             try:
@@ -531,10 +574,12 @@ class SegmentedAudioService:
                 ffmpeg_available = process.returncode == 0
             except Exception:
                 ffmpeg_available = False
+                logger.warning("FFmpeg not available")
             
             return ffmpeg_available
         
-        except Exception:
+        except Exception as e:
+            logger.error(f"Configuration check error: {e}")
             return False
 
 # Global instance

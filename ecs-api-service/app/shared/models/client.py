@@ -130,8 +130,8 @@ class AgentAssignment(BaseModel):
 class Client(BaseModel):
     """Complete client record with call history"""
     # MongoDB document ID
-    id: Optional[str] = Field(None, alias="_id", description="MongoDB document ID")
-    
+    # id: Optional[str] = Field(None, alias="_id", description="MongoDB document ID")
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     # Core client information
     client: ClientInfo = Field(..., description="Basic client information")
     

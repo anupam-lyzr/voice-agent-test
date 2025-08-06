@@ -1,120 +1,112 @@
 """
-Shared Configuration Settings
-Environment variables and application settings for both API and Worker services
+Shared Configuration Settings - Fixed with proper defaults
 """
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, validator
 from typing import Optional, List
 import os
-import pytz
-from datetime import datetime
 
 class Settings(BaseSettings):
-    """Global application settings"""
+    """Global application settings with proper defaults"""
     
     # Application Settings
     app_name: str = "Voice Agent Production"
-    debug: bool = Field(default=False, env="DEBUG")
-    environment: str = Field(default="development", env="ENVIRONMENT")
-    
+    debug: bool = Field(default=False)
+    environment: str = Field(default="development")
+    host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8000)
+
     # AWS Configuration
-    aws_region: str = Field(default="us-east-1", env="AWS_REGION")
-    aws_account_id: str = Field(default="", env="AWS_ACCOUNT_ID")
+    aws_region: Optional[str] = Field(default=None)
+    aws_account_id: Optional[str] = Field(default=None)
     
-    # Database Configuration (DocumentDB/MongoDB)
-    documentdb_host: str = Field(default="localhost", env="DOCUMENTDB_HOST")
-    documentdb_port: int = Field(default=27017, env="DOCUMENTDB_PORT")
-    documentdb_database: str = Field(default="voice_agent", env="DOCUMENTDB_DATABASE")
-    documentdb_username: str = Field(default="admin", env="DOCUMENTDB_USERNAME")
-    documentdb_password: str = Field(default="password123", env="DOCUMENTDB_PASSWORD")
-    documentdb_ssl: bool = Field(default=False, env="DOCUMENTDB_SSL")
+    # Database Configuration with defaults
+    documentdb_host: str = Field(default="localhost")
+    documentdb_port: int = Field(default=27017)
+    documentdb_database: str = Field(default="voice_agent")
+    documentdb_username: str = Field(default="admin")
+    documentdb_password: str = Field(default="password123")
+    documentdb_ssl: bool = Field(default=False)
     
-    # Redis Configuration
-    redis_url: str = Field(default="redis://localhost:6379", env="REDIS_URL")
-    redis_password: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
-    redis_db: int = Field(default=0, env="REDIS_DB")
+    # Redis Configuration with defaults
+    redis_url: str = Field(default="redis://localhost:6379")
+    redis_password: Optional[str] = Field(default=None)
+    redis_db: int = Field(default=0)
     
     # Twilio Configuration
-    twilio_account_sid: str = Field(default="", env="TWILIO_ACCOUNT_SID")
-    twilio_auth_token: str = Field(default="", env="TWILIO_AUTH_TOKEN")
-    twilio_phone_number: str = Field(default="", env="TWILIO_PHONE_NUMBER")
+    twilio_account_sid: str = Field(default="")
+    twilio_auth_token: str = Field(default="")
+    twilio_phone_number: str = Field(default="")
     
     # AI Service API Keys
-    deepgram_api_key: str = Field(default="", env="DEEPGRAM_API_KEY")
-    elevenlabs_api_key: str = Field(default="", env="ELEVENLABS_API_KEY")
+    deepgram_api_key: str = Field(default="")
+    elevenlabs_api_key: str = Field(default="")
     
-    # LYZR Configuration  
-    lyzr_api_base_url: str = Field(default="https://agent-prod.studio.lyzr.ai", env="LYZR_API_BASE_URL")
-    lyzr_conversation_agent_id: str = Field(default="", env="LYZR_CONVERSATION_AGENT_ID")
-    lyzr_summary_agent_id: str = Field(default="", env="LYZR_SUMMARY_AGENT_ID")
-    lyzr_user_api_key: str = Field(default="", env="LYZR_USER_API_KEY")
+    # LYZR Configuration
+    lyzr_api_base_url: str = Field(default="https://agent-prod.studio.lyzr.ai")
+    lyzr_conversation_agent_id: str = Field(default="")
+    lyzr_summary_agent_id: str = Field(default="")
+    lyzr_user_api_key: str = Field(default="")
+    lyzr_api_key: Optional[str] = Field(default=None)
     
+    # Voice Settings with defaults
+    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0")
+    voice_stability: float = Field(default=0.55)
+    voice_similarity_boost: float = Field(default=0.70)
+    voice_style: float = Field(default=0.2)
+    voice_speed: float = Field(default=0.87)
+    use_speaker_boost: bool = Field(default=True)
+    elevenlabs_voice_id: Optional[str] = Field(default=None)
+    elevenlabs_voice_speed: Optional[float] = Field(default=None)
+    elevenlabs_voice_settings: Optional[str] = Field(default=None)
+
     # CRM Configuration
-    capsule_api_token: str = Field(default="", env="CAPSULE_API_TOKEN")
-    capsule_api_url: str = Field(default="https://api.capsulecrm.com", env="CAPSULE_API_URL")
-    
+    capsule_api_token: Optional[str] = Field(default=None)
+    capsule_api_url: Optional[str] = Field(default=None)
+
     # Google Calendar Integration
-    google_calendar_client_id: str = Field(default="", env="GOOGLE_CALENDAR_CLIENT_ID")
-    google_calendar_client_secret: str = Field(default="", env="GOOGLE_CALENDAR_CLIENT_SECRET")
-    
-    # Email Configuration (SES)
-    ses_region: str = Field(default="us-east-1", env="SES_REGION")
-    from_email: str = Field(default="noreply@altruisadvisor.com", env="FROM_EMAIL")
-    
+    google_calendar_client_id: Optional[str] = Field(default=None)
+    google_calendar_client_secret: Optional[str] = Field(default=None)
+
+    # Email Configuration
+    ses_region: Optional[str] = Field(default=None)
+    from_email: Optional[str] = Field(default=None)
+
     # S3 Configuration
-    s3_bucket_audio: str = Field(default="voice-agent-audio-bucket", env="S3_BUCKET_AUDIO")
-    s3_bucket_recordings: str = Field(default="voice-agent-recordings-bucket", env="S3_BUCKET_RECORDINGS")
+    s3_bucket_audio: Optional[str] = Field(default=None)
+    s3_bucket_recordings: Optional[str] = Field(default=None)
+
+    # Performance Settings with defaults
+    max_concurrent_calls: int = Field(default=30)
+    call_timeout_seconds: int = Field(default=300)
+    max_call_attempts: int = Field(default=6)
+    cache_ttl_seconds: int = Field(default=300)
+    session_cache_ttl: int = Field(default=1800)
+    webhook_timeout: int = Field(default=10)
     
-    # Performance Settings
-    max_concurrent_calls: int = Field(default=30, env="MAX_CONCURRENT_CALLS")
-    call_timeout_seconds: int = Field(default=300, env="CALL_TIMEOUT_SECONDS")
-    max_call_attempts: int = Field(default=6, env="MAX_CALL_ATTEMPTS")
+    # Business Hours with defaults
+    business_start_hour: int = Field(default=9)
+    business_end_hour: int = Field(default=17)
+    business_days: str = Field(default="1,2,3,4,5")
+    business_timezone: str = Field(default="America/New_York")
     
-    # Voice Processing Settings
-    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0", env="VOICE_ID")  # Adam voice
-    voice_stability: float = Field(default=0.55, env="VOICE_STABILITY")
-    voice_similarity_boost: float = Field(default=0.70, env="VOICE_SIMILARITY_BOOST") 
-    voice_style: float = Field(default=0.19999999999999996, env="VOICE_STYLE")
-    voice_speed: float = Field(default=0.8700000000000001, env="VOICE_SPEED")  # Default speed
-    use_speaker_boost: bool = Field(default=True, env="USE_SPEAKER_BOOST")
+    # Queue Settings with defaults (for worker)
+    sqs_queue_url: str = Field(default="")
+    sqs_visibility_timeout: int = Field(default=300)
+    sqs_wait_time: int = Field(default=20)
     
-    # TTS Settings
-    tts_model: str = Field(default="eleven_turbo_v2_5", env="TTS_MODEL")
-    tts_output_format: str = Field(default="mp3_22050_32", env="TTS_OUTPUT_FORMAT")
-    
-    # STT Settings
-    stt_model: str = Field(default="nova-2", env="STT_MODEL")
-    stt_language: str = Field(default="en-US", env="STT_LANGUAGE")
-    
-    # Business Hours Configuration
-    business_start_hour: int = Field(default=9, env="BUSINESS_START_HOUR")
-    business_end_hour: int = Field(default=17, env="BUSINESS_END_HOUR") 
-    business_days: str = Field(default="1,2,3,4,5", env="BUSINESS_DAYS")  # Mon-Fri
-    business_timezone: str = Field(default="America/New_York", env="BUSINESS_TIMEZONE")
-    
-    # Cache Settings
-    cache_ttl_seconds: int = Field(default=300, env="CACHE_TTL_SECONDS")  # 5 minutes
-    session_cache_ttl: int = Field(default=1800, env="SESSION_CACHE_TTL")  # 30 minutes
-    
-    # Webhook Settings (for API service)
-    base_url: str = Field(default="https://your-domain.com", env="BASE_URL")
-    webhook_timeout: int = Field(default=10, env="WEBHOOK_TIMEOUT")
-    
-    # Queue Settings (for Worker service)
-    sqs_queue_url: str = Field(default="", env="SQS_QUEUE_URL")
-    sqs_visibility_timeout: int = Field(default=300, env="SQS_VISIBILITY_TIMEOUT")
-    sqs_wait_time: int = Field(default=20, env="SQS_WAIT_TIME")
-    
-    # ECS Settings
-    ecs_cluster_name: str = Field(default="voice-agent-cluster", env="ECS_CLUSTER_NAME")
-    ecs_service_name: str = Field(default="voice-agent-api", env="ECS_SERVICE_NAME")
+    # Other settings
+    base_url: str = Field(default="http://localhost:8000")
+    tts_model: str = Field(default="eleven_turbo_v2_5")
+    tts_output_format: str = Field(default="mp3_22050_32")
+    stt_model: str = Field(default="nova-2")
+    stt_language: str = Field(default="en-US")
     
     class Config:
         env_file = ".env"
         case_sensitive = False
-        extra = "ignore"
-    
+        
     @property
     def mongodb_uri(self) -> str:
         """Get MongoDB connection URI"""
@@ -123,11 +115,7 @@ class Settings(BaseSettings):
         else:
             auth = ""
         
-        if self.documentdb_ssl:
-            ssl_params = "?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&retryWrites=false"
-        else:
-            # For local development with Docker MongoDB, add authSource=admin
-            ssl_params = "?authSource=admin" if auth else ""
+        ssl_params = "?authSource=admin" if auth else ""
         
         return f"mongodb://{auth}{self.documentdb_host}:{self.documentdb_port}/{self.documentdb_database}{ssl_params}"
     
@@ -136,12 +124,13 @@ class Settings(BaseSettings):
         """Get ElevenLabs voice settings"""
         return {
             "stability": self.voice_stability,
-            "similarity_boost": self.voice_similarity_boost, 
+            "similarity_boost": self.voice_similarity_boost,
             "style": self.voice_style,
             "use_speaker_boost": self.use_speaker_boost,
-            "speed": self.voice_speed if hasattr(self, 'voice_speed') else 0.87  # Default speed
+            "speed": self.voice_speed
         }
-    
+
+
     @property
     def business_days_list(self) -> List[int]:
         """Get business days as list of integers"""
