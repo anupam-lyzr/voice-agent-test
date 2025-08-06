@@ -32,13 +32,16 @@ class DatabaseClient:
         try:
             logger.info(f"Connecting to database: {settings.documentdb_host}:{settings.documentdb_port}")
             
+            # The client is now configured with the required TLS setting
             self.client = AsyncIOMotorClient(
                 settings.mongodb_uri,
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=10000,
                 socketTimeoutMS=10000,
                 maxPoolSize=10,
-                minPoolSize=2
+                minPoolSize=2,
+                # **** THIS IS THE LINE YOU MUST ADD ****
+                tlsAllowInvalidCertificates=True
             )
             
             self.database = self.client[settings.documentdb_database]
@@ -54,8 +57,7 @@ class DatabaseClient:
             
         except Exception as e:
             logger.error(f"❌ Database connection failed: {e}")
-            raise ConnectionFailure(f"Failed to connect to database: {e}")
-    
+            raise ConnectionFailure(f"Failed to connect to database: {e}") 
     async def disconnect(self):
         """Disconnect from database"""
         if self.client:
