@@ -21,7 +21,7 @@ services:
     container_name: voice-agent-redis
     ports:
       - "6379:6379"
-    command: redis-server --requirepass redis123
+    command: redis-server
     volumes:
       - redis_data:/data
     networks:
@@ -40,7 +40,7 @@ services:
       - .env
     environment:
       - DOCUMENTDB_HOST=mongodb
-      - REDIS_URL=redis://:redis123@redis:6379
+      - REDIS_URL=redis://redis:6379
       - PYTHONPATH=/app
     depends_on:
       - mongodb
@@ -59,7 +59,7 @@ services:
       - .env
     environment:
       - DOCUMENTDB_HOST=mongodb
-      - REDIS_URL=redis://:redis123@redis:6379
+      - REDIS_URL=redis://redis:6379
       - PYTHONPATH=/app
     depends_on:
       - mongodb

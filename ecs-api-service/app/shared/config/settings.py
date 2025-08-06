@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     
     # Redis Configuration with defaults
     redis_url: str = Field(default="redis://localhost:6379")
-    redis_password: Optional[str] = Field(default=None)
+    # redis_password: Optional[str] = Field(default=None)
     redis_db: int = Field(default=0)
     
     # Twilio Configuration

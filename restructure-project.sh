@@ -220,7 +220,7 @@ services:
       - .env
     environment:
       - DOCUMENTDB_HOST=mongodb
-      - REDIS_URL=redis://:redis123@redis:6379
+      - REDIS_URL=redis://redis:6379
       - PYTHONPATH=/app
     depends_on:
       - mongodb
@@ -237,7 +237,7 @@ services:
       - .env
     environment:
       - DOCUMENTDB_HOST=mongodb
-      - REDIS_URL=redis://:redis123@redis:6379
+      - REDIS_URL=redis://redis:6379
       - PYTHONPATH=/app
     depends_on:
       - mongodb
