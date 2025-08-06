@@ -28,36 +28,44 @@ class DatabaseClient:
         self._connected = False
     
     async def connect(self):
-        """Connect to MongoDB/DocumentDB"""
+        """Connect to MongoDB/DocumentDB based on the environment."""
         try:
             logger.info(f"Connecting to database: {settings.documentdb_host}:{settings.documentdb_port}")
-            
-            # The client is now configured with the required TLS setting
+            logger.info(f"Environment: {settings.environment}")
+
+            client_options = {
+                'serverSelectionTimeoutMS': 5000,
+                'connectTimeoutMS': 10000,
+                'socketTimeoutMS': 10000,
+                'maxPoolSize': 100,
+                'minPoolSize': 5,
+            }
+
+            if settings.is_production():
+                logger.info("Applying production TLS settings for DocumentDB.")
+                client_options['tls'] = True
+                # Do not include tlsAllowInvalidCertificates here unless strictly necessary
+                # It's already in URI if needed
+            else:
+                logger.info("Using non-TLS local development settings with authSource=admin.")
+
             self.client = AsyncIOMotorClient(
                 settings.mongodb_uri,
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=10000,
-                socketTimeoutMS=10000,
-                maxPoolSize=10,
-                minPoolSize=2,
-                # **** THIS IS THE LINE YOU MUST ADD ****
-                tlsAllowInvalidCertificates=True
+                **client_options
             )
-            
+
             self.database = self.client[settings.documentdb_database]
-            
-            # Test connection
+
             await self.client.admin.command('ping')
-            
-            # Create indexes
             await self._create_indexes()
-            
+
             self._connected = True
             logger.info("✅ Database connected successfully")
-            
+
         except Exception as e:
             logger.error(f"❌ Database connection failed: {e}")
-            raise ConnectionFailure(f"Failed to connect to database: {e}") 
+            raise ConnectionFailure(f"Failed to connect to database: {e}")
+  
     async def disconnect(self):
         """Disconnect from database"""
         if self.client:
