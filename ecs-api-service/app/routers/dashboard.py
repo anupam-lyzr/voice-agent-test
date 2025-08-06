@@ -161,7 +161,7 @@ async def get_campaign_stats():
         if session_repo:
             try:
                 from shared.utils.database import db_client
-                if db_client and db_client.database:
+                if db_client is not None and db_client.database is not None:
                     # Calculate average call duration
                     pipeline = [
                         {"$match": {"session_metrics.total_call_duration_seconds": {"$gt": 0}}},
@@ -467,7 +467,7 @@ async def get_performance_metrics():
             session_repo = await get_session_repo()
             if session_repo:
                 from shared.utils.database import db_client
-                if db_client and db_client.database:
+                if db_client is not None and db_client.database is not None:
                     pipeline = [
                         {"$match": {"session_metrics": {"$exists": True}}},
                         {"$group": {
@@ -544,7 +544,7 @@ async def get_test_clients():
     except Exception as e:
         logger.error(f"❌ Test clients error: {e}")
         return {"clients": [], "error": str(e)}
-        
+
 @router.post("/test-clients")
 async def create_test_client(client_data: TestClientCreate):
     """Create a test client"""
@@ -849,7 +849,7 @@ async def get_call_status(call_sid: str):
             session_repo = await get_session_repo()
             if session_repo:
                 from shared.utils.database import db_client
-                if db_client and db_client.database:
+                if db_client is not None and db_client.database is not None:
                     doc = await db_client.database.call_sessions.find_one({"twilio_call_sid": call_sid})
                     if doc:
                         db_session = CallSession(**doc)
@@ -935,7 +935,7 @@ async def delete_test_agent(agent_id: str):
         
         # Delete from database
         from shared.utils.database import db_client
-        if db_client and db_client.database:
+        if db_client is not None and db_client.database is not None:
             from bson import ObjectId
             result = await db_client.database.test_agents.delete_one({"_id": ObjectId(agent_id)})
             
