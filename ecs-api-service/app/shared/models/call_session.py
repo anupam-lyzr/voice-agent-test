@@ -26,6 +26,7 @@ class ConversationStage(str, Enum):
     GREETING = "greeting"
     INTEREST_CHECK = "interest_check"
     SCHEDULING = "scheduling"
+    DNC_CHECK = "dnc_check"
     DNC_QUESTION = "dnc_question"
     CLOSING = "closing"
     COMPLETED = "completed"
@@ -133,6 +134,9 @@ class CallSession(BaseModel):
     
     # Error tracking
     errors: List[Dict[str, Any]] = Field(default_factory=list, description="Session errors")
+    
+    # Call summary (AI-generated)
+    call_summary: Optional[Dict[str, Any]] = Field(None, description="AI-generated call summary")
     
     # Test call flag
     is_test_call: bool = Field(default=False, description="Whether this is a test call")

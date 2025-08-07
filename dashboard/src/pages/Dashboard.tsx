@@ -23,15 +23,11 @@ import {
   CheckCircle,
   TrendingUp,
   Activity,
-  Calendar,
   RefreshCw,
-  PlayCircle,
-  AlertTriangle,
   Server,
 } from "lucide-react";
 import { toast } from "sonner";
 
-// Updated interfaces to match backend API
 interface CampaignStats {
   total_clients: number;
   completed_calls: number;
@@ -46,26 +42,19 @@ interface CampaignStats {
 interface CallLog {
   call_id: string;
   client_name: string;
-  phone: string;
+  client_phone: string;
   outcome: string;
   duration: string;
-  timestamp: string;
-  summary?: string;
+  started_at: string;
 }
 
 interface SystemHealth {
   status: string;
   components: {
-    database: boolean;
-    cache: boolean;
-    voice_processor: boolean;
-    hybrid_tts: boolean;
-  };
-  configuration: {
-    lyzr: boolean;
-    elevenlabs: boolean;
-    deepgram: boolean;
-    twilio: boolean;
+    database: { connected: boolean };
+    cache: { connected: boolean };
+    voice_processor: { configured: boolean };
+    hybrid_tts: { configured: boolean };
   };
 }
 
@@ -83,7 +72,6 @@ export default function Dashboard() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      // Fetch all data using the correct API endpoints
       const [statsRes, callLogsRes, healthRes] = await Promise.all([
         fetch(`${API_BASE_URL}/stats`),
         fetch(`${API_BASE_URL}/call-logs?limit=10`),
@@ -115,11 +103,30 @@ export default function Dashboard() {
     }
   };
 
+  const refreshSystemHealth = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/system-health/refresh`, {
+        method: "POST",
+      });
+      if (response.ok) {
+        const healthData = await response.json();
+        setHealth(healthData);
+        setLastRefresh(new Date());
+        toast.success("System health refreshed");
+      } else {
+        toast.error("Failed to refresh system health");
+      }
+    } catch (error) {
+      console.error("Failed to refresh system health:", error);
+      toast.error("Failed to refresh system health");
+    }
+  };
+
   useEffect(() => {
     fetchData();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
+    // Removed automatic polling - now only manual refresh
+    // const interval = setInterval(fetchData, 30000);
+    // return () => clearInterval(interval);
   }, []);
 
   const getStatusBadge = (status: string) => {
@@ -150,7 +157,7 @@ export default function Dashboard() {
     return (
       <div className="p-8">
         <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           <span className="ml-2">Loading dashboard...</span>
         </div>
       </div>
@@ -159,7 +166,6 @@ export default function Dashboard() {
 
   return (
     <div className="p-8 space-y-8">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
@@ -182,18 +188,30 @@ export default function Dashboard() {
             <RefreshCw
               className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
             />
-            Refresh
+            <span className="ml-2">Refresh</span>
           </Button>
         </div>
       </div>
 
-      {/* System Health */}
       {health && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center">
-              <Server className="h-5 w-5 mr-2" />
-              System Health
+            <CardTitle className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Server className="h-5 w-5 mr-2" />
+                System Health
+              </div>
+              <Button
+                onClick={refreshSystemHealth}
+                disabled={isLoading}
+                size="sm"
+                variant="outline"
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
+                />
+                <span className="ml-2">Refresh Health</span>
+              </Button>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -211,7 +229,6 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {/* Campaign Stats */}
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Card>
@@ -286,7 +303,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Recent Call Logs */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center">
@@ -313,7 +329,7 @@ export default function Dashboard() {
                     <TableCell className="font-medium">
                       {log.call_id.substring(0, 8)}...
                     </TableCell>
-                    <TableCell>{log.client_name || log.phone}</TableCell>
+                    <TableCell>{log.client_name || log.client_phone}</TableCell>
                     <TableCell>
                       <Badge {...getOutcomeBadge(log.outcome)}>
                         {log.outcome.replace("_", " ")}
@@ -321,7 +337,7 @@ export default function Dashboard() {
                     </TableCell>
                     <TableCell>{log.duration}</TableCell>
                     <TableCell>
-                      {new Date(log.timestamp).toLocaleTimeString()}
+                      {new Date(log.started_at).toLocaleTimeString()}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -332,38 +348,6 @@ export default function Dashboard() {
               No recent call activity found
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Quick Actions */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Quick Actions</CardTitle>
-          <CardDescription>Common testing and monitoring tasks</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-4">
-            <Button variant="outline" asChild>
-              <a href="/testing">
-                <PlayCircle className="h-4 w-4 mr-2" />
-                Test System
-              </a>
-            </Button>
-            <Button variant="outline" onClick={fetchData}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh Data
-            </Button>
-            <Button variant="outline" asChild>
-              <a
-                href={`${API_BASE_URL}/test-services`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Server className="h-4 w-4 mr-2" />
-                Service Health
-              </a>
-            </Button>
-          </div>
         </CardContent>
       </Card>
     </div>

@@ -447,7 +447,7 @@ class SegmentedAudioService:
             
             "agent_intro": f"Great, looks like {agent_name or '[AGENT]'} was the last agent you worked with here at Altruis. Would you like to schedule a quick 15-minute discovery call with them to get reacquainted? A simple Yes or No will do!",
             
-            "schedule_confirmation": f"Great, give me a moment while I check {agent_name or '[AGENT]'}'s calendar... Perfect! I've scheduled a 15-minute discovery call for you. You should receive a calendar invitation shortly. Thank you and have a wonderful day!",
+            "schedule_confirmation": f"Perfect! I'll send you an email shortly with {agent_name}'s available time slots. You can review the calendar and choose a time that works best for your schedule. Thank you so much for your time today, and have a wonderful day!",
             
             "no_schedule_followup": f"No problem, {agent_name or '[AGENT]'} will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!",
             

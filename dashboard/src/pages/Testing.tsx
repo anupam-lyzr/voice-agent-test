@@ -47,8 +47,6 @@ import {
   User,
   Play,
   Loader2,
-  CheckCircle,
-  XCircle,
   Clock,
   RefreshCw,
   Rocket,
@@ -56,29 +54,22 @@ import {
   Eye,
   Trash2,
   PhoneCall,
-  Calendar,
-  MessageSquare,
   Activity,
   TrendingUp,
   AlertTriangle,
-  Settings,
-  FileText,
+  // Settings,
   Timer,
-  Volume2,
   Mic,
   Speaker,
-  Database,
-  Monitor,
+  // Database,
+  // Monitor,
   Zap,
   Users,
   Target,
 } from "lucide-react";
 
-// API base URL from env
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-// const API_BASE = "http://localhost:8000";
 
-// Interface definitions
 interface TestClient {
   id: string;
   name: string;
@@ -88,7 +79,6 @@ interface TestClient {
   total_attempts: number;
   created_at: string;
   last_call_outcome?: string;
-  is_test_client: boolean;
 }
 
 interface TestAgent {
@@ -115,12 +105,6 @@ interface CallLog {
   summary?: string;
   is_test_call: boolean;
   conversation_turns?: number;
-  latency_metrics?: {
-    transcription_ms: number;
-    processing_ms: number;
-    tts_ms: number;
-    total_ms: number;
-  };
 }
 
 interface CallSummary {
@@ -152,22 +136,47 @@ interface ActiveCall {
 
 interface SystemHealth {
   status: string;
+  timestamp: string;
   components: {
-    database: boolean;
-    cache: boolean;
-    voice_processor: boolean;
-    hybrid_tts: boolean;
+    voice_processor: { configured: boolean; status: string };
+    hybrid_tts: {
+      configured: boolean;
+      status: string;
+      stats?: Record<string, unknown>;
+    };
+    lyzr: {
+      configured: boolean;
+      status: string;
+      conversation_agent?: string;
+      summary_agent?: string;
+      test_latency_ms?: number;
+    };
+    elevenlabs: {
+      configured: boolean;
+      status: string;
+      test_latency_ms?: number;
+      default_voice?: string;
+    };
+    deepgram: {
+      configured: boolean;
+      status: string;
+      test_latency_ms?: number;
+      model?: string;
+    };
+    database: { connected: boolean; status: string };
+    redis: { connected: boolean; status: string };
+    twilio: { configured: boolean; status: string; phone_number?: string };
   };
-  configuration: {
-    lyzr: boolean;
-    elevenlabs: boolean;
-    deepgram: boolean;
-    twilio: boolean;
-  };
-  performance_metrics: {
-    avg_response_time: number;
-    success_rate: number;
-    active_calls: number;
+  metrics?: Record<string, unknown>;
+  alerts?: Array<{
+    level: string;
+    service: string;
+    message: string;
+  }>;
+  campaign?: {
+    total_clients: number;
+    completed_calls: number;
+    completion_rate: number;
   };
 }
 
@@ -180,13 +189,11 @@ interface TestStats {
   avg_response_time: string;
 }
 
-// A new component for a cleaner form row layout
 const FormRow = ({ children }: { children: React.ReactNode }) => (
   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{children}</div>
 );
 
 export default function Testing() {
-  // State for forms
   const [newClient, setNewClient] = useState({
     first_name: "",
     last_name: "",
@@ -201,13 +208,10 @@ export default function Testing() {
     timezone: "America/New_York",
   });
 
-  // State for loading indicators
   const [isCreatingClient, setIsCreatingClient] = useState(false);
   const [isCreatingAgent, setIsCreatingAgent] = useState(false);
   const [isCallInProgress, setIsCallInProgress] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(false);
-
-  // State for data
   const [testClients, setTestClients] = useState<TestClient[]>([]);
   const [testAgents, setTestAgents] = useState<TestAgent[]>([]);
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
@@ -216,15 +220,10 @@ export default function Testing() {
   const [selectedAgent, setSelectedAgent] = useState("");
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [testStats, setTestStats] = useState<TestStats | null>(null);
-
-  // State for dialogs and details
   const [selectedCallSummary, setSelectedCallSummary] =
     useState<CallSummary | null>(null);
-  const [isCallDetailsOpen, setIsCallDetailsOpen] = useState(false);
-  const [currentCall, setCurrentCall] = useState<ActiveCall | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
 
-  // Data Fetching
   const loadData = async (
     type?:
       | "clients"
@@ -255,13 +254,9 @@ export default function Testing() {
           `${API_BASE}/api/dashboard/call-logs?limit=50`
         );
         const logsData = await logsRes.json();
-        // Filter for test calls and add test flag
-        const testCallLogs = (logsData.logs || []).map((log: any) => ({
-          ...log,
-          is_test_call:
-            log.call_id?.includes("test") || log.call_sid?.includes("test"),
-          agent_name: log.agent_name || "Test Agent",
-        }));
+        const testCallLogs = (logsData.logs || []).filter(
+          (log: Record<string, unknown>) => log.is_test_call
+        );
         setCallLogs(testCallLogs);
       }
 
@@ -269,22 +264,29 @@ export default function Testing() {
         const activeRes = await fetch(`${API_BASE}/api/dashboard/active-calls`);
         if (activeRes.ok) {
           const activeData = await activeRes.json();
-          setActiveCalls(activeData.calls || []);
+          setActiveCalls(activeData.active_calls || []);
         }
       }
 
       if (!type || type === "health") {
-        const healthRes = await fetch(
-          `${API_BASE}/api/dashboard/system-health`
-        );
-        if (healthRes.ok) {
-          const healthData = await healthRes.json();
-          setSystemHealth(healthData);
+        try {
+          const healthRes = await fetch(
+            `${API_BASE}/api/dashboard/system-health`
+          );
+          if (healthRes.ok) {
+            const healthData = await healthRes.json();
+            setSystemHealth(healthData);
+          } else {
+            console.error("Failed to fetch system health");
+            setSystemHealth(null);
+          }
+        } catch (error) {
+          console.error("Error fetching system health:", error);
+          setSystemHealth(null);
         }
       }
 
       if (!type || type === "stats") {
-        // Calculate test stats from call logs
         const testCalls = callLogs.filter((call) => call.is_test_call);
         const successfulCalls = testCalls.filter((call) =>
           [
@@ -320,16 +322,21 @@ export default function Testing() {
 
   useEffect(() => {
     loadData();
-    // Refresh data every 10 seconds for live updates
+    // Reduced polling frequency and made it conditional
     const interval = setInterval(() => {
-      loadData("call-logs");
-      loadData("active-calls");
-      loadData("health");
-    }, 10000);
+      // Only poll if there are active calls or if we're on the testing page
+      if (activeCalls.length > 0) {
+        loadData("call-logs");
+        loadData("active-calls");
+        loadData("health");
+      } else {
+        // Less frequent polling when no active calls
+        loadData("call-logs");
+      }
+    }, 60000); // Changed from 10000 to 60000 (1 minute)
     return () => clearInterval(interval);
-  }, []);
+  }, [activeCalls.length]); // Added dependency to re-create interval when active calls change
 
-  // Handlers
   const handleCreateClient = async () => {
     setIsCreatingClient(true);
     try {
@@ -354,7 +361,7 @@ export default function Testing() {
           description: result.detail || "Failed to create client.",
         });
       }
-    } catch (error) {
+    } catch {
       toast.error("An unexpected error occurred.");
     }
     setIsCreatingClient(false);
@@ -383,7 +390,7 @@ export default function Testing() {
           description: result.detail || "Failed to create agent.",
         });
       }
-    } catch (error) {
+    } catch {
       toast.error("An unexpected error occurred.");
     }
     setIsCreatingAgent(false);
@@ -407,15 +414,14 @@ export default function Testing() {
 
       if (result.success) {
         toast.success("Real test call initiated!", {
-          description: `Calling ${result.phone} - Call SID: ${result.call_sid}`,
+          description: `Calling ${result.client_phone} - Call SID: ${result.call_sid}`,
         });
 
-        // Add to active calls for monitoring
         const newActiveCall: ActiveCall = {
           call_id: result.call_id,
           call_sid: result.call_sid,
           client_name: result.client_name,
-          client_phone: result.phone,
+          client_phone: result.client_phone,
           agent_name: result.agent_name,
           status: result.status || "initiated",
           started_at: new Date().toISOString(),
@@ -425,23 +431,19 @@ export default function Testing() {
           last_activity: new Date().toISOString(),
         };
         setActiveCalls((prev) => [...prev, newActiveCall]);
-        setCurrentCall(newActiveCall);
-
-        // Start polling for call status
         pollCallStatus(result.call_sid);
       } else {
         toast.error("Test call failed", {
           description: result.detail || "Failed to start test call.",
         });
       }
-    } catch (error) {
+    } catch {
       toast.error("An unexpected error occurred.");
     }
     setIsCallInProgress(false);
   };
 
   const pollCallStatus = async (callSid: string) => {
-    // Poll for real call status updates
     const pollInterval = setInterval(async () => {
       try {
         const statusRes = await fetch(
@@ -449,8 +451,6 @@ export default function Testing() {
         );
         if (statusRes.ok) {
           const statusData = await statusRes.json();
-
-          // Update active calls
           setActiveCalls((prev) =>
             prev.map((call) =>
               call.call_sid === callSid
@@ -462,24 +462,25 @@ export default function Testing() {
                 : call
             )
           );
-
-          // If call completed, stop polling and refresh data
-          if (statusData.status === "completed") {
+          // Stop polling when call is completed or failed
+          if (
+            ["completed", "failed", "busy", "no_answer"].includes(
+              statusData.status
+            )
+          ) {
             clearInterval(pollInterval);
             loadData("call-logs");
             loadData("clients");
             setActiveCalls((prev) =>
               prev.filter((call) => call.call_sid !== callSid)
             );
-            setCurrentCall(null);
           }
         }
       } catch (error) {
         console.error("Failed to poll call status:", error);
       }
-    }, 3000);
-
-    // Stop polling after 5 minutes
+    }, 5000); // Changed from 3000 to 5000 (5 seconds)
+    // Stop polling after 5 minutes instead of 5 minutes
     setTimeout(() => clearInterval(pollInterval), 300000);
   };
 
@@ -497,7 +498,7 @@ export default function Testing() {
       } else {
         toast.error("Failed to delete client");
       }
-    } catch (error) {
+    } catch {
       toast.error("Error deleting client");
     }
   };
@@ -505,16 +506,15 @@ export default function Testing() {
   const viewCallSummary = async (callLog: CallLog) => {
     try {
       const summaryRes = await fetch(
-        `${API_BASE}/api/dashboard/call-summary/${callLog.call_id}`
+        `${API_BASE}/api/dashboard/call-details/${callLog.call_id}`
       );
       if (summaryRes.ok) {
         const summaryData = await summaryRes.json();
         setSelectedCallSummary(summaryData.summary);
-        setIsCallDetailsOpen(true);
       } else {
         toast.error("Failed to load call summary");
       }
-    } catch (error) {
+    } catch {
       toast.error("Error loading call summary");
     }
   };
@@ -529,8 +529,9 @@ export default function Testing() {
       failed: { variant: "destructive" as const, color: "text-red-600" },
       busy: { variant: "secondary" as const, color: "text-orange-600" },
       no_answer: { variant: "outline" as const, color: "text-gray-600" },
+      unknown: { variant: "outline" as const, color: "text-gray-600" },
     };
-    return statusMap[status as keyof typeof statusMap] || statusMap.completed;
+    return statusMap[status as keyof typeof statusMap] || statusMap.unknown;
   };
 
   const getOutcomeBadge = (outcome: string) => {
@@ -556,39 +557,64 @@ export default function Testing() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          Voice Agent Testing & Monitoring
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Complete testing environment with real call capabilities, live
-          monitoring, and production-like data visualization.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">
+            Voice Agent Testing & Monitoring
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Complete testing environment with real call capabilities, live
+            monitoring, and production-like data visualization.
+          </p>
+        </div>
+        <Button
+          onClick={() => loadData()}
+          disabled={isLoadingData}
+          size="sm"
+          variant="outline"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${isLoadingData ? "animate-spin" : ""}`}
+          />
+          <span className="ml-2">Refresh Data</span>
+        </Button>
       </div>
 
-      {/* System Health Alert */}
-      {systemHealth && systemHealth.status !== "healthy" && (
-        <Card className="border-yellow-200 bg-yellow-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-yellow-800">
-              <AlertTriangle className="h-5 w-5" />
-              System Health Warning
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-yellow-700">
-              Some system components are not fully operational. Check the System
-              Health tab for details.
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      {systemHealth &&
+        systemHealth.status !== "healthy" &&
+        systemHealth.status !== "all_systems_operational" && (
+          <Card className="border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-900/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-yellow-800 dark:text-yellow-200">
+                <AlertTriangle className="h-5 w-5" />
+                System Health Warning
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-yellow-700 dark:text-yellow-300">
+                Some system components are not fully operational. Check the
+                System Health tab for details.
+              </p>
+              {systemHealth.alerts && systemHealth.alerts.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {systemHealth.alerts.map((alert, idx) => (
+                    <div key={idx} className="text-sm">
+                      <span className="font-medium capitalize">
+                        {alert.level}:
+                      </span>{" "}
+                      {alert.message}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
-      {/* Active Calls Monitor */}
       {activeCalls.length > 0 && (
-        <Card className="border-green-200 bg-green-50">
+        <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/20">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-green-800">
+            <CardTitle className="flex items-center gap-2 text-green-800 dark:text-green-200">
               <PhoneCall className="h-5 w-5 animate-pulse" />
               Active Test Calls ({activeCalls.length})
             </CardTitle>
@@ -598,18 +624,19 @@ export default function Testing() {
               {activeCalls.map((call) => (
                 <div
                   key={call.call_id}
-                  className="flex items-center justify-between p-3 bg-white rounded-lg border"
+                  className="flex items-center justify-between p-3 bg-background rounded-lg border"
                 >
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
                       <Phone className="h-4 w-4 text-green-600" />
                       <span className="font-medium">{call.client_name}</span>
                     </div>
-                    <Badge {...getStatusBadge(call.status)}>
-                      {call.status.replace("_", " ")}
+                    <Badge {...getStatusBadge(call.status || "unknown")}>
+                      {(call.status || "unknown").replace("_", " ")}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
-                      Stage: {call.current_stage.replace("_", " ")}
+                      Stage:{" "}
+                      {(call.current_stage || "unknown").replace("_", " ")}
                     </span>
                     <span className="text-sm text-muted-foreground">
                       Turns: {call.conversation_turns}
@@ -626,7 +653,6 @@ export default function Testing() {
         </Card>
       )}
 
-      {/* Main Content Tabs */}
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
@@ -637,13 +663,10 @@ export default function Testing() {
           <TabsTrigger value="create">Create Data</TabsTrigger>
           <TabsTrigger value="test-calls">Test Calls</TabsTrigger>
           <TabsTrigger value="call-logs">Call Logs</TabsTrigger>
-          <TabsTrigger value="monitoring">Live Monitor</TabsTrigger>
           <TabsTrigger value="health">System Health</TabsTrigger>
         </TabsList>
 
-        {/* Overview Tab */}
         <TabsContent value="overview" className="space-y-6">
-          {/* Test Statistics */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -713,7 +736,6 @@ export default function Testing() {
             </Card>
           </div>
 
-          {/* Quick Test Actions */}
           <Card>
             <CardHeader>
               <CardTitle>Quick Test Actions</CardTitle>
@@ -744,7 +766,10 @@ export default function Testing() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => setActiveTab("health")}
+                  onClick={() => {
+                    setActiveTab("health");
+                    loadData("health");
+                  }}
                 >
                   <Activity className="h-4 w-4 mr-2" />
                   Check System Health
@@ -753,7 +778,6 @@ export default function Testing() {
             </CardContent>
           </Card>
 
-          {/* Recent Activity Preview */}
           <Card>
             <CardHeader>
               <CardTitle>Recent Test Activity</CardTitle>
@@ -797,10 +821,8 @@ export default function Testing() {
           </Card>
         </TabsContent>
 
-        {/* Create Data Tab */}
         <TabsContent value="create" className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Create Test Client */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -898,7 +920,6 @@ export default function Testing() {
               </CardContent>
             </Card>
 
-            {/* Create Test Agent */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -995,9 +1016,7 @@ export default function Testing() {
             </Card>
           </div>
 
-          {/* Test Data Management */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Test Clients Table */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -1056,7 +1075,6 @@ export default function Testing() {
               </CardContent>
             </Card>
 
-            {/* Test Agents Table */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -1107,7 +1125,6 @@ export default function Testing() {
           </div>
         </TabsContent>
 
-        {/* Test Calls Tab */}
         <TabsContent value="test-calls" className="space-y-6">
           <Card>
             <CardHeader>
@@ -1178,14 +1195,14 @@ export default function Testing() {
                 </div>
               </FormRow>
 
-              <div className="border rounded-lg p-4 bg-blue-50">
+              <div className="border rounded-lg p-4 bg-blue-50 dark:bg-blue-900/20">
                 <div className="flex items-start gap-3">
                   <PhoneCall className="h-5 w-5 text-blue-600 mt-0.5" />
                   <div>
-                    <h4 className="font-medium text-blue-900">
+                    <h4 className="font-medium text-blue-900 dark:text-blue-200">
                       Real Call Execution
                     </h4>
-                    <p className="text-sm text-blue-700">
+                    <p className="text-sm text-blue-700 dark:text-blue-300">
                       This will make an actual phone call to the selected client
                       using Twilio. The call will go through the complete
                       production pipeline including Deepgram STT, LYZR
@@ -1211,19 +1228,18 @@ export default function Testing() {
                   : "Start Real Test Call"}
               </Button>
 
-              {/* Call Progress Indicator */}
               {isCallInProgress && (
-                <Card className="border-blue-200 bg-blue-50">
+                <Card className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20">
                   <CardContent className="pt-6">
                     <div className="space-y-4">
                       <div className="flex items-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                        <span className="text-blue-800 font-medium">
+                        <span className="text-blue-800 font-medium dark:text-blue-200">
                           Call in progress...
                         </span>
                       </div>
                       <Progress value={33} className="w-full" />
-                      <p className="text-sm text-blue-600">
+                      <p className="text-sm text-blue-600 dark:text-blue-300">
                         The system is processing your test call. You should
                         receive a call shortly.
                       </p>
@@ -1234,7 +1250,6 @@ export default function Testing() {
             </CardContent>
           </Card>
 
-          {/* Test Call Performance Metrics */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -1286,16 +1301,17 @@ export default function Testing() {
             </CardContent>
           </Card>
         </TabsContent>
-
-        {/* Call Logs Tab */}
         <TabsContent value="call-logs" className="space-y-6">
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Test Call Logs & History</CardTitle>
+                  <CardTitle>
+                    Test Call Logs & History ({callLogs.length})
+                  </CardTitle>
                   <CardDescription>
-                    Complete call records with summaries and performance metrics
+                    Complete test call records with summaries and performance
+                    metrics
                   </CardDescription>
                 </div>
                 <Button
@@ -1321,7 +1337,6 @@ export default function Testing() {
                       <TableHead>Status</TableHead>
                       <TableHead>Outcome</TableHead>
                       <TableHead>Duration</TableHead>
-                      <TableHead>Performance</TableHead>
                       <TableHead>Started</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
@@ -1363,20 +1378,6 @@ export default function Testing() {
                           </TableCell>
                           <TableCell>{log.duration}</TableCell>
                           <TableCell>
-                            {log.latency_metrics ? (
-                              <div className="text-xs">
-                                <div>
-                                  Total: {log.latency_metrics.total_ms}ms
-                                </div>
-                                <div className="text-muted-foreground">
-                                  STT: {log.latency_metrics.transcription_ms}ms
-                                </div>
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
                             <div className="text-sm">
                               {new Date(log.started_at).toLocaleDateString()}
                             </div>
@@ -1407,7 +1408,6 @@ export default function Testing() {
                                 </DialogHeader>
                                 {selectedCallSummary && (
                                   <div className="space-y-6">
-                                    {/* Summary Overview */}
                                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                       <div className="p-3 border rounded-lg">
                                         <Label className="text-xs">
@@ -1455,8 +1455,6 @@ export default function Testing() {
                                         </div>
                                       </div>
                                     </div>
-
-                                    {/* Key Points */}
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                       <div className="space-y-3">
                                         <div>
@@ -1471,7 +1469,6 @@ export default function Testing() {
                                             )}
                                           </ul>
                                         </div>
-
                                         <div>
                                           <Label className="font-medium">
                                             Customer Concerns
@@ -1485,7 +1482,6 @@ export default function Testing() {
                                           </ul>
                                         </div>
                                       </div>
-
                                       <div className="space-y-3">
                                         <div>
                                           <Label className="font-medium">
@@ -1499,7 +1495,6 @@ export default function Testing() {
                                             )}
                                           </ul>
                                         </div>
-
                                         <div>
                                           <Label className="font-medium">
                                             Follow-up Timeframe
@@ -1512,13 +1507,11 @@ export default function Testing() {
                                         </div>
                                       </div>
                                     </div>
-
-                                    {/* Agent Notes */}
                                     <div>
                                       <Label className="font-medium">
                                         AI Agent Notes
                                       </Label>
-                                      <div className="mt-2 p-3 bg-gray-50 rounded-lg">
+                                      <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                                         <p className="text-sm">
                                           {selectedCallSummary.agent_notes}
                                         </p>
@@ -1537,141 +1530,17 @@ export default function Testing() {
             </CardContent>
           </Card>
         </TabsContent>
-
-        {/* Live Monitor Tab */}
-        <TabsContent value="monitoring" className="space-y-6">
-          {/* Real-time Metrics */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Active Calls
-                </CardTitle>
-                <PhoneCall className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{activeCalls.length}</div>
-                <p className="text-xs text-muted-foreground">
-                  Currently in progress
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Avg Response Time
-                </CardTitle>
-                <Timer className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">1.4s</div>
-                <p className="text-xs text-muted-foreground">Last 10 calls</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Success Rate
-                </CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">94.2%</div>
-                <p className="text-xs text-muted-foreground">Today's tests</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  System Load
-                </CardTitle>
-                <Activity className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">23%</div>
-                <Progress value={23} className="mt-2" />
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Live Activity Feed */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-5 w-5" />
-                Live Activity Feed
-              </CardTitle>
-              <CardDescription>
-                Real-time system events and call processing updates
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {/* Mock live events - replace with real WebSocket data */}
-                <div className="flex items-center gap-3 p-3 border rounded-lg">
-                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">
-                      Call completed successfully
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Client: John Doe | Outcome: Interested | Duration: 2m 45s
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date().toLocaleTimeString()}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 p-3 border rounded-lg">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">
-                      New test call initiated
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Target: +1234567890 | Agent: Jane Smith
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date(Date.now() - 30000).toLocaleTimeString()}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 p-3 border rounded-lg">
-                  <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">
-                      System health check completed
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      All services operational | Response time: 1.2s
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {new Date(Date.now() - 120000).toLocaleTimeString()}
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* System Health Tab */}
         <TabsContent value="health" className="space-y-6">
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="flex items-center gap-2">
-                    <Monitor className="h-5 w-5" />
-                    System Health Dashboard
+                    <Activity className="h-5 w-5" />
+                    System Health & Status
                   </CardTitle>
                   <CardDescription>
-                    Complete system status and service health monitoring
+                    Real-time monitoring of all voice agent components
                   </CardDescription>
                 </div>
                 <Button
@@ -1683,323 +1552,134 @@ export default function Testing() {
                   <RefreshCw
                     className={`h-4 w-4 ${isLoadingData ? "animate-spin" : ""}`}
                   />
-                  Refresh
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
               {systemHealth ? (
                 <div className="space-y-6">
-                  {/* Overall Status */}
-                  <div className="flex items-center gap-4 p-4 border rounded-lg">
-                    <div
-                      className={`w-4 h-4 rounded-full ${
+                  <div className="flex items-center gap-4">
+                    <Badge
+                      variant={
                         systemHealth.status === "healthy"
-                          ? "bg-green-500"
-                          : systemHealth.status === "degraded"
-                          ? "bg-yellow-500"
-                          : "bg-red-500"
-                      }`}
-                    ></div>
-                    <div>
-                      <div className="font-medium">
-                        System Status: {systemHealth.status.toUpperCase()}
-                      </div>
-                      <div className="text-sm text-muted-foreground">
-                        Last checked: {new Date().toLocaleString()}
-                      </div>
-                    </div>
+                          ? "default"
+                          : "destructive"
+                      }
+                      className="text-lg px-4 py-1"
+                    >
+                      {systemHealth.status.toUpperCase()}
+                    </Badge>
+                    <span className="text-sm text-muted-foreground">
+                      Last updated:{" "}
+                      {new Date(systemHealth.timestamp).toLocaleString()}
+                    </span>
                   </div>
 
-                  {/* Core Components */}
-                  <div>
-                    <h3 className="font-medium mb-3">Core Components</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {Object.entries(systemHealth.components).map(
-                        ([component, status]) => (
-                          <div
-                            key={component}
-                            className="flex items-center justify-between p-3 border rounded-lg"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Database className="h-4 w-4" />
-                              <span className="font-medium capitalize">
-                                {component.replace("_", " ")}
-                              </span>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {Object.entries(systemHealth.components).map(
+                      ([key, component]) => (
+                        <Card key={key}>
+                          <CardHeader className="pb-3">
+                            <CardTitle className="text-sm font-medium capitalize">
+                              {key.replace(/_/g, " ")}
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="flex items-center justify-between">
+                              <Badge
+                                variant={
+                                  component.status === "ready"
+                                    ? "default"
+                                    : "destructive"
+                                }
+                              >
+                                {component.status}
+                              </Badge>
+                              {"test_latency_ms" in component &&
+                                component.test_latency_ms && (
+                                  <span className="text-xs text-muted-foreground">
+                                    {component.test_latency_ms.toFixed(0)}ms
+                                  </span>
+                                )}
                             </div>
-                            <Badge variant={status ? "default" : "destructive"}>
-                              {status ? "Operational" : "Down"}
-                            </Badge>
-                          </div>
-                        )
-                      )}
-                    </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    )}
                   </div>
 
-                  {/* External Services */}
-                  <div>
-                    <h3 className="font-medium mb-3">
-                      External Service Configuration
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {Object.entries(systemHealth.configuration).map(
-                        ([service, configured]) => (
-                          <div
-                            key={service}
-                            className="flex items-center justify-between p-3 border rounded-lg"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Settings className="h-4 w-4" />
-                              <span className="font-medium uppercase">
-                                {service}
-                              </span>
+                  {systemHealth.alerts && systemHealth.alerts.length > 0 && (
+                    <Card className="border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20">
+                      <CardHeader>
+                        <CardTitle className="text-red-800 dark:text-red-200">
+                          Active Alerts
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-2">
+                          {systemHealth.alerts.map((alert, idx) => (
+                            <div key={idx} className="flex items-start gap-2">
+                              <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5" />
+                              <div>
+                                <span className="font-medium capitalize">
+                                  {alert.level}:
+                                </span>{" "}
+                                {alert.message}
+                              </div>
                             </div>
-                            <Badge
-                              variant={configured ? "default" : "secondary"}
-                            >
-                              {configured ? "Configured" : "Not Configured"}
-                            </Badge>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
 
-                  {/* Performance Metrics */}
-                  {systemHealth.performance_metrics && (
-                    <div>
-                      <h3 className="font-medium mb-3">Performance Metrics</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="p-4 border rounded-lg">
-                          <div className="text-sm text-muted-foreground">
-                            Avg Response Time
+                  {systemHealth.campaign && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Campaign Statistics</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="p-4 border rounded-lg">
+                            <div className="text-2xl font-bold">
+                              {systemHealth.campaign.total_clients}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              Total Clients
+                            </div>
                           </div>
-                          <div className="text-2xl font-bold">
-                            {systemHealth.performance_metrics.avg_response_time}
-                            ms
+                          <div className="p-4 border rounded-lg">
+                            <div className="text-2xl font-bold">
+                              {systemHealth.campaign.completed_calls}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              Completed Calls
+                            </div>
+                          </div>
+                          <div className="p-4 border rounded-lg">
+                            <div className="text-2xl font-bold">
+                              {systemHealth.campaign.completion_rate.toFixed(1)}
+                              %
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              Completion Rate
+                            </div>
                           </div>
                         </div>
-                        <div className="p-4 border rounded-lg">
-                          <div className="text-sm text-muted-foreground">
-                            Success Rate
-                          </div>
-                          <div className="text-2xl font-bold">
-                            {systemHealth.performance_metrics.success_rate}%
-                          </div>
-                        </div>
-                        <div className="p-4 border rounded-lg">
-                          <div className="text-sm text-muted-foreground">
-                            Active Calls
-                          </div>
-                          <div className="text-2xl font-bold">
-                            {systemHealth.performance_metrics.active_calls}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                      </CardContent>
+                    </Card>
                   )}
                 </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
                   Loading system health data...
                 </div>
               )}
             </CardContent>
           </Card>
-
-          {/* Service Test Actions */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Service Testing</CardTitle>
-              <CardDescription>
-                Test individual services and integrations
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <Button
-                  variant="outline"
-                  className="h-20 flex-col gap-2"
-                  onClick={() =>
-                    window.open(
-                      `${API_BASE}/api/dashboard/test-voice-processing`,
-                      "_blank"
-                    )
-                  }
-                >
-                  <Mic className="h-6 w-6" />
-                  Test Voice Processing
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-20 flex-col gap-2"
-                  onClick={() =>
-                    window.open(`${API_BASE}/api/dashboard/test-tts`, "_blank")
-                  }
-                >
-                  <Speaker className="h-6 w-6" />
-                  Test Text-to-Speech
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-20 flex-col gap-2"
-                  onClick={() =>
-                    window.open(
-                      `${API_BASE}/api/dashboard/test-services`,
-                      "_blank"
-                    )
-                  }
-                >
-                  <Settings className="h-6 w-6" />
-                  Test All Services
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Configuration Summary */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Environment Configuration</CardTitle>
-              <CardDescription>
-                Current system configuration and environment details
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="p-3 border rounded-lg">
-                    <div className="text-sm font-medium">Environment</div>
-                    <div className="text-sm text-muted-foreground">
-                      Development/Testing
-                    </div>
-                  </div>
-                  <div className="p-3 border rounded-lg">
-                    <div className="text-sm font-medium">API Base URL</div>
-                    <div className="text-sm text-muted-foreground">
-                      {API_BASE}
-                    </div>
-                  </div>
-                  <div className="p-3 border rounded-lg">
-                    <div className="text-sm font-medium">Voice Processing</div>
-                    <div className="text-sm text-muted-foreground">
-                      Hybrid TTS Enabled
-                    </div>
-                  </div>
-                  <div className="p-3 border rounded-lg">
-                    <div className="text-sm font-medium">Real-time Audio</div>
-                    <div className="text-sm text-muted-foreground">
-                      WebSocket Streaming
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
-
-      {/* Call Details Dialog */}
-      <Dialog open={isCallDetailsOpen} onOpenChange={setIsCallDetailsOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Call Summary & Analysis</DialogTitle>
-            <DialogDescription>
-              Complete AI-generated analysis and performance metrics
-            </DialogDescription>
-          </DialogHeader>
-          {selectedCallSummary && (
-            <div className="space-y-6">
-              {/* Summary Overview */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-3 border rounded-lg">
-                  <Label className="text-xs">Outcome</Label>
-                  <div className="mt-1">
-                    <Badge {...getOutcomeBadge(selectedCallSummary.outcome)}>
-                      {selectedCallSummary.outcome.replace("_", " ")}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="p-3 border rounded-lg">
-                  <Label className="text-xs">Sentiment</Label>
-                  <div className="mt-1">
-                    <Badge variant="outline">
-                      {selectedCallSummary.sentiment}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="p-3 border rounded-lg">
-                  <Label className="text-xs">Urgency</Label>
-                  <div className="mt-1">
-                    <Badge variant="secondary">
-                      {selectedCallSummary.urgency}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="p-3 border rounded-lg">
-                  <Label className="text-xs">Quality Score</Label>
-                  <div className="text-2xl font-bold mt-1">
-                    {selectedCallSummary.call_score}/10
-                  </div>
-                </div>
-              </div>
-
-              {/* Key Points and Actions */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-3">
-                  <div>
-                    <Label className="font-medium">Key Points</Label>
-                    <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                      {selectedCallSummary.key_points?.map((point, i) => (
-                        <li key={i}>{point}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div>
-                    <Label className="font-medium">Customer Concerns</Label>
-                    <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                      {selectedCallSummary.customer_concerns?.map(
-                        (concern, i) => (
-                          <li key={i}>{concern}</li>
-                        )
-                      )}
-                    </ul>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div>
-                    <Label className="font-medium">Recommended Actions</Label>
-                    <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                      {selectedCallSummary.recommended_actions?.map(
-                        (action, i) => (
-                          <li key={i}>{action}</li>
-                        )
-                      )}
-                    </ul>
-                  </div>
-
-                  <div>
-                    <Label className="font-medium">Follow-up Timeframe</Label>
-                    <p className="text-sm mt-2">
-                      {selectedCallSummary.follow_up_timeframe}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Agent Notes */}
-              <div>
-                <Label className="font-medium">AI Agent Notes</Label>
-                <div className="mt-2 p-3 bg-gray-50 rounded-lg">
-                  <p className="text-sm">{selectedCallSummary.agent_notes}</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

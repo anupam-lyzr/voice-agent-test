@@ -33,6 +33,11 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 voice_processor = VoiceProcessor()
 hybrid_tts = HybridTTSService()
 
+# Add caching for system health
+_system_health_cache: Dict[str, Any] = {}
+_cache_timestamp: Optional[datetime] = None
+_cache_duration = timedelta(minutes=5)  # Cache for 5 minutes
+
 # Database repository getters
 async def get_client_repo():
     """Get client repository (ensures it's initialized)"""
@@ -751,55 +756,70 @@ async def initiate_test_call(call_request: TestCallRequest):
 
 @router.get("/active-calls")
 async def get_active_calls():
-    """Get currently active calls"""
+    """Get currently active calls - only returns truly active calls"""
     try:
         active_calls = []
         
-        # Get from Twilio router's active sessions
+        # Get from Twilio router's active sessions - only include IN_PROGRESS calls
         try:
             from routers.twilio import active_sessions
+            from shared.models.call_session import CallStatus as CallStatusEnum
+            
             for call_sid, session in active_sessions.items():
-                active_calls.append({
-                    "call_sid": call_sid,
-                    "session_id": session.session_id,
-                    "client_phone": session.phone_number,
-                    "client_name": session.client_data.get("client_name", "Unknown") if session.client_data else "Unknown",
-                    "status": session.call_status.value if session.call_status else "in_progress",
-                    "stage": session.conversation_stage.value if session.conversation_stage else "unknown",
-                    "turns": len(session.conversation_turns) if session.conversation_turns else 0,
-                    "started_at": session.started_at.isoformat() if session.started_at else None,
-                    "duration": int((datetime.utcnow() - session.started_at).total_seconds()) if session.started_at else 0
-                })
+                # Only include calls that are actually in progress
+                if session.call_status == CallStatusEnum.IN_PROGRESS:
+                    active_calls.append({
+                        "call_sid": call_sid,
+                        "session_id": session.session_id,
+                        "client_phone": session.phone_number,
+                        "client_name": session.client_data.get("client_name", "Unknown") if session.client_data else "Unknown",
+                        "status": session.call_status.value if session.call_status else "in_progress",
+                        "stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+                        "turns": len(session.conversation_turns) if session.conversation_turns else 0,
+                        "started_at": session.started_at.isoformat() if session.started_at else None,
+                        "duration": int((datetime.utcnow() - session.started_at).total_seconds()) if session.started_at else 0
+                    })
         except ImportError:
             logger.warning("Could not import active_sessions from twilio router")
         
-        # Also check Redis cache for active sessions
+        # Also check Redis cache for active sessions - but filter out completed ones
         try:
             from shared.utils.redis_client import session_cache
+            from shared.models.call_session import CallStatus as CallStatusEnum
+            
             if session_cache:
                 cached_active = await session_cache.get_active_sessions()
                 for session_data in cached_active:
-                    if not any(c["call_sid"] == session_data.get("twilio_call_sid") for c in active_calls):
+                    # Only include if not already in active_calls and status is IN_PROGRESS
+                    call_sid = session_data.get("twilio_call_sid")
+                    if (call_sid and 
+                        not any(c["call_sid"] == call_sid for c in active_calls) and
+                        session_data.get("call_status") == CallStatusEnum.IN_PROGRESS.value):
+                        
                         active_calls.append({
-                            "call_sid": session_data.get("twilio_call_sid", "unknown"),
+                            "call_sid": call_sid,
                             "session_id": "cached",
                             "client_phone": session_data.get("phone_number", "unknown"),
-                            "status": session_data.get("status", "unknown"),
+                            "client_name": session_data.get("client_data", {}).get("client_name", "Unknown") if session_data.get("client_data") else "Unknown",
+                            "status": session_data.get("call_status", "in_progress"),
+                            "stage": session_data.get("conversation_stage", "unknown"),
+                            "turns": len(session_data.get("conversation_turns", [])),
                             "started_at": session_data.get("started_at"),
+                            "duration": 0,  # Will be calculated if started_at exists
                             "source": "cache"
                         })
         except Exception as e:
             logger.warning(f"Could not get cached active sessions: {e}")
         
         return {
-            "active_calls": active_calls, 
+            "calls": active_calls,  # Changed from "active_calls" to "calls" to match frontend
             "total_active": len(active_calls),
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
         logger.error(f"Active calls error: {e}")
-        return {"active_calls": [], "total_active": 0, "error": str(e)}
+        return {"calls": [], "total_active": 0, "error": str(e)}
 
 @router.get("/call-status/{call_sid}")
 async def get_call_status(call_sid: str):
@@ -1280,30 +1300,59 @@ async def test_all_services():
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@router.post("/system-health/refresh")
+async def refresh_system_health():
+    """Manually refresh system health (clears cache and forces fresh check)"""
+    global _system_health_cache, _cache_timestamp
+    
+    # Clear cache
+    _system_health_cache = {}
+    _cache_timestamp = None
+    
+    # Force fresh health check
+    return await get_system_health()
+
 @router.get("/system-health")
 async def get_system_health():
-    """Get comprehensive system health status"""
+    """Get basic system health status (optimized to reduce API calls with caching)"""
+    global _system_health_cache, _cache_timestamp
+    
+    # Return cached result if still valid
+    if (_cache_timestamp and 
+        datetime.utcnow() - _cache_timestamp < _cache_duration and 
+        _system_health_cache):
+        return _system_health_cache
+    
     try:
         health_data = {
             "status": "checking",
             "timestamp": datetime.utcnow().isoformat(),
             "components": {},
-            "metrics": {},
             "alerts": []
         }
         
-        # Check all components
-        service_test = await test_all_services()
-        health_data["components"] = service_test["services"]
-        
-        # Get performance metrics
+        # Only check critical services to reduce API calls
         try:
-            perf_metrics = await get_performance_metrics()
-            health_data["metrics"] = perf_metrics.get("current_metrics", {})
+            # Check database connection
+            from shared.utils.database import db_client
+            if db_client is not None and db_client.database is not None:
+                health_data["components"]["database"] = {"status": "ready"}
+            else:
+                health_data["components"]["database"] = {"status": "error", "message": "Database not connected"}
         except Exception as e:
-            logger.warning(f"Could not get performance metrics: {e}")
+            health_data["components"]["database"] = {"status": "error", "message": str(e)}
         
-        # Get campaign stats
+        # Check Redis connection (simplified)
+        try:
+            from shared.utils.redis_client import redis_client
+            if redis_client is not None:
+                health_data["components"]["redis"] = {"status": "ready"}
+            else:
+                health_data["components"]["redis"] = {"status": "error", "message": "Redis not connected"}
+        except Exception as e:
+            health_data["components"]["redis"] = {"status": "error", "message": str(e)}
+        
+        # Check campaign stats (cached separately)
         try:
             campaign_stats = await get_campaign_stats()
             health_data["campaign"] = {
@@ -1326,14 +1375,6 @@ async def get_system_health():
                     "message": f"{service} is not operational: {status.get('status')}"
                 })
         
-        # Check performance
-        if health_data.get("metrics", {}).get("avg_total_latency_ms", 0) > 2500:
-            alerts.append({
-                "level": "warning",
-                "service": "performance",
-                "message": "Average response latency exceeds target (>2500ms)"
-            })
-        
         health_data["alerts"] = alerts
         
         # Determine overall health
@@ -1343,6 +1384,10 @@ async def get_system_health():
             health_data["status"] = "unhealthy"
         else:
             health_data["status"] = "degraded"
+        
+        # Cache the result
+        _system_health_cache = health_data
+        _cache_timestamp = datetime.utcnow()
         
         return health_data
         

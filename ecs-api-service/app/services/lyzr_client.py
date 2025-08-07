@@ -40,6 +40,10 @@ class LYZRAgentClient:
         self.total_latency = 0.0
         self.errors_count = 0
         
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 1.0  # Minimum 1 second between requests
+        
         # Session management
         self.active_sessions = {}
     
@@ -106,6 +110,16 @@ class LYZRAgentClient:
         start_time = time.time()
         
         try:
+            # Rate limiting - ensure minimum interval between requests
+            current_time = time.time()
+            time_since_last = current_time - self.last_request_time
+            if time_since_last < self.min_request_interval:
+                wait_time = self.min_request_interval - time_since_last
+                logger.info(f"⏱️ Rate limiting: waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+            
+            self.last_request_time = time.time()
+            
             # Get session info
             session_info = self.active_sessions.get(session_id, {})
             client_name = session_info.get("client_name", "")
@@ -161,6 +175,23 @@ class LYZRAgentClient:
                     "turn_count": session_info.get("turn_count", 0) + 1
                 }
             
+            elif response.status_code == 429:
+                error_msg = "Rate limit exceeded"
+                logger.warning(f"⚠️ {error_msg} for conversation")
+                self.errors_count += 1
+                
+                # Provide fallback response
+                fallback_response = self._get_fallback_response(customer_message)
+                
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "response": fallback_response,
+                    "latency_ms": latency,
+                    "session_ended": True,
+                    "fallback_used": True,
+                    "rate_limited": True
+                }
             else:
                 error_msg = f"LYZR API error: {response.status_code}"
                 logger.error(f"❌ {error_msg}")
@@ -213,6 +244,16 @@ class LYZRAgentClient:
         start_time = time.time()
         
         try:
+            # Rate limiting - ensure minimum interval between requests
+            current_time = time.time()
+            time_since_last = current_time - self.last_request_time
+            if time_since_last < self.min_request_interval:
+                wait_time = self.min_request_interval - time_since_last
+                logger.info(f"⏱️ Rate limiting summary: waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+            
+            self.last_request_time = time.time()
+            
             # Prepare summary prompt
             summary_prompt = self._create_summary_prompt(
                 conversation_transcript, 
@@ -256,6 +297,18 @@ class LYZRAgentClient:
                     "latency_ms": latency
                 }
             
+            elif response.status_code == 429:
+                logger.warning(f"⚠️ Rate limit hit (429) for summary generation, using fallback")
+                fallback_summary = self._generate_basic_summary(conversation_transcript, call_outcome)
+                
+                return {
+                    "success": False,
+                    "error": "Rate limit exceeded",
+                    "summary": fallback_summary,
+                    "latency_ms": latency,
+                    "fallback_used": True,
+                    "rate_limited": True
+                }
             else:
                 logger.error(f"❌ Summary API error: {response.status_code}")
                 fallback_summary = self._generate_basic_summary(conversation_transcript, call_outcome)

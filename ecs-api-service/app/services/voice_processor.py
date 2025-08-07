@@ -1,6 +1,6 @@
 """
 Fixed Voice Processor Service - Production Ready
-Handles customer speech processing with email scheduling mention
+Handles customer speech processing with proper state transitions
 """
 
 import asyncio
@@ -25,8 +25,8 @@ class VoiceProcessor:
         
         # Common response patterns for faster processing
         self.response_patterns = {
-            "yes_responses": ["yes", "yeah", "yep", "sure", "absolutely", "definitely", "of course", "okay", "ok", "sounds good", "that's fine"],
-            "no_responses": ["no", "nope", "not really", "not interested", "no thanks", "don't think so"],
+            "yes_responses": ["yes", "yeah", "yep", "sure", "absolutely", "definitely", "of course", "okay", "ok", "sounds good", "that's fine", "it will"],
+            "no_responses": ["no", "nope", "not really", "not interested", "no thanks", "don't think so", "i'm not"],
             "maybe_responses": ["maybe", "not sure", "i don't know", "let me think", "perhaps"],
             "dnc_requests": ["remove", "do not call", "don't call", "take me off", "unsubscribe", "stop calling"]
         }
@@ -37,14 +37,8 @@ class VoiceProcessor:
     def _configure(self):
         """Configure the voice processor"""
         try:
-            # Check if we have minimal configuration
-            if settings.lyzr_conversation_agent_id and settings.lyzr_user_api_key:
-                self._configured = True
-                logger.info("✅ Voice Processor configured successfully")
-            else:
-                logger.warning("⚠️ Voice Processor configuration incomplete")
-                # Still mark as configured for testing - we have fallbacks
-                self._configured = True
+            self._configured = True
+            logger.info("✅ Voice Processor configured successfully")
         except Exception as e:
             logger.error(f"❌ Voice Processor configuration error: {e}")
             self._configured = False
@@ -74,55 +68,77 @@ class VoiceProcessor:
         )
         
         try:
-            # STATE MACHINE LOGIC
+            # STATE MACHINE LOGIC - FIXED TO PREVENT LOOPS
             if session.conversation_stage == ConversationStage.GREETING:
                 # After initial greeting, listening for interest
                 if self._is_interested(customer_input):
+                    # Move to SCHEDULING stage
                     return await self._handle_initial_interest(session, start_time)
                 elif self._is_not_interested(customer_input):
+                    # Move to DNC_CHECK stage
                     return await self._handle_initial_disinterest(session, start_time)
                 elif self._is_dnc_request(customer_input):
+                    # Move to GOODBYE stage
                     return await self._handle_dnc_request(session, start_time)
                 elif self._is_maybe(customer_input):
+                    # Stay in GREETING stage
                     return await self._handle_maybe_response(session, start_time)
                 else:
+                    # Stay in GREETING stage for clarification
                     return await self._handle_unclear_response(session, start_time, "greeting")
             
             elif session.conversation_stage == ConversationStage.SCHEDULING:
                 # Asked if they want to connect with their agent
                 if self._is_interested(customer_input):
+                    # Customer wants to schedule - END CALL
                     return await self._handle_scheduling_confirmation(session, start_time)
                 elif self._is_not_interested(customer_input):
+                    # Customer doesn't want to schedule but was interested - END CALL
                     return await self._handle_scheduling_rejection(session, start_time)
                 elif self._is_dnc_request(customer_input):
+                    # Move to GOODBYE with DNC
                     return await self._handle_dnc_request(session, start_time)
                 else:
+                    # Stay in SCHEDULING for clarification
                     return await self._handle_unclear_response(session, start_time, "scheduling")
             
             elif session.conversation_stage == ConversationStage.DNC_CHECK:
                 # Asked about continuing communications
                 if self._is_interested(customer_input):
+                    # Keep communications - END CALL
                     return await self._handle_keep_communications(session, start_time)
-                elif self._is_not_interested(customer_input):
+                elif self._is_not_interested(customer_input) or self._is_dnc_request(customer_input):
+                    # Confirm DNC - END CALL
                     return await self._handle_dnc_confirmation(session, start_time)
                 else:
+                    # Stay in DNC_CHECK for clarification
                     return await self._handle_unclear_response(session, start_time, "dnc_check")
             
-            # Fallback for any other stage
+            # If we're in GOODBYE or any unexpected stage, end the call
             else:
-                logger.warning(f"⚠️ Unexpected stage: {session.conversation_stage.value}")
+                logger.info(f"✅ In final stage or unexpected state: {session.conversation_stage.value}")
                 return await self._create_response(
                     response_text="Thank you for your time today. Have a wonderful day!",
                     response_category="goodbye",
                     conversation_stage=ConversationStage.GOODBYE,
                     end_conversation=True,
                     outcome="completed",
-                    start_time=start_time
+                    start_time=start_time,
+                    detected_intent="completed"
                 )
                 
         except Exception as e:
             logger.error(f"❌ Voice processing error: {e}")
-            return await self._create_error_response(start_time)
+            # Return a proper error response instead of throwing
+            return await self._create_response(
+                response_text="I apologize, I'm having some technical difficulties. Thank you for your patience.",
+                response_category="error",
+                conversation_stage=ConversationStage.GOODBYE,
+                end_conversation=True,
+                outcome="error",
+                start_time=start_time,
+                detected_intent="error"
+            )
     
     # --- Helper methods for checking input patterns ---
     
@@ -145,28 +161,35 @@ class VoiceProcessor:
     # --- State transition handlers ---
     
     async def _handle_initial_interest(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user expresses initial interest"""
-        logger.info("✅ Customer interested in service")
+        """Handle when user expresses initial interest - MOVE TO SCHEDULING"""
+        logger.info("✅ Customer interested in service - Moving to SCHEDULING stage")
         
         agent_name = session.client_data.get("last_agent", session.client_data.get("agent_name", "your previous agent"))
+        
+        # IMPORTANT: Update session stage to SCHEDULING
+        session.conversation_stage = ConversationStage.SCHEDULING
         
         return await self._create_response(
             response_text=(
                 f"Wonderful! I see that {agent_name} was the last agent who helped you. "
-                f"I'd love to connect you with them again. We'll send you an email shortly "
-                f"with {agent_name}'s available time slots, and you can choose what works "
+                f"I'd love to connect you with them again. We'll send you an email with "
+                f"{agent_name}'s available time slots so you can choose what works "
                 f"best for your schedule. Does that sound good?"
             ),
             response_category="agent_introduction",
             conversation_stage=ConversationStage.SCHEDULING,
             end_conversation=False,
             outcome="interested",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="interested"
         )
     
     async def _handle_initial_disinterest(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user is not interested"""
-        logger.info("❌ Customer not interested")
+        """Handle when user is not interested - MOVE TO DNC_CHECK"""
+        logger.info("❌ Customer not interested - Moving to DNC_CHECK stage")
+        
+        # IMPORTANT: Update session stage to DNC_CHECK
+        session.conversation_stage = ConversationStage.DNC_CHECK
         
         return await self._create_response(
             response_text=(
@@ -178,34 +201,47 @@ class VoiceProcessor:
             conversation_stage=ConversationStage.DNC_CHECK,
             end_conversation=False,
             outcome="not_interested",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="not_interested"
         )
     
     async def _handle_scheduling_confirmation(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user confirms they want to schedule"""
-        logger.info("✅ Customer confirmed scheduling")
+        """Handle when user confirms they want to schedule - END CALL"""
+        logger.info("✅ Customer confirmed scheduling - Ending call with success")
         
         agent_name = session.client_data.get("last_agent", session.client_data.get("agent_name", "your agent"))
         
+        # IMPORTANT: Move to GOODBYE and end conversation
+        session.conversation_stage = ConversationStage.GOODBYE
+        
+        # Try to schedule the meeting asynchronously
+        try:
+            await self._schedule_meeting_async(session, agent_name)
+        except Exception as e:
+            logger.error(f"❌ Failed to schedule meeting: {e}")
+        
         return await self._create_response(
             response_text=(
-                f"Perfect! You'll receive an email within the next few minutes with "
-                f"{agent_name}'s calendar. Simply click on the time that works best for you, "
-                f"and it will automatically schedule your 15-minute discovery call. "
+                f"Perfect! I'll send you an email shortly with {agent_name}'s available time slots. "
+                f"You can review the calendar and choose a time that works best for your schedule. "
                 f"Thank you so much for your time today, and have a wonderful day!"
             ),
             response_category="schedule_confirmation",
             conversation_stage=ConversationStage.GOODBYE,
             end_conversation=True,
             outcome="scheduled",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="scheduled"
         )
     
     async def _handle_scheduling_rejection(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user declines scheduling"""
-        logger.info("❌ Customer declined scheduling")
+        """Handle when user declines scheduling - END CALL"""
+        logger.info("❌ Customer declined scheduling - Ending call")
         
         agent_name = session.client_data.get("last_agent", session.client_data.get("agent_name", "your agent"))
+        
+        # IMPORTANT: Move to GOODBYE and end conversation
+        session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
@@ -217,12 +253,16 @@ class VoiceProcessor:
             conversation_stage=ConversationStage.GOODBYE,
             end_conversation=True,
             outcome="interested_no_schedule",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="interested_no_schedule"
         )
     
     async def _handle_dnc_request(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle do-not-call request"""
-        logger.info("🚫 Customer requested DNC")
+        """Handle do-not-call request - END CALL"""
+        logger.info("🚫 Customer requested DNC - Ending call")
+        
+        # IMPORTANT: Move to GOODBYE and end conversation
+        session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
@@ -235,12 +275,16 @@ class VoiceProcessor:
             conversation_stage=ConversationStage.GOODBYE,
             end_conversation=True,
             outcome="dnc_requested",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="dnc_requested"
         )
     
     async def _handle_keep_communications(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user wants to keep receiving communications"""
-        logger.info("✅ Customer wants to keep communications")
+        """Handle when user wants to keep receiving communications - END CALL"""
+        logger.info("✅ Customer wants to keep communications - Ending call")
+        
+        # IMPORTANT: Move to GOODBYE and end conversation
+        session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
@@ -253,12 +297,16 @@ class VoiceProcessor:
             conversation_stage=ConversationStage.GOODBYE,
             end_conversation=True,
             outcome="keep_communications",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="keep_communications"
         )
     
     async def _handle_dnc_confirmation(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user confirms DNC"""
-        logger.info("🚫 Customer confirmed DNC")
+        """Handle when user confirms DNC - END CALL"""
+        logger.info("🚫 Customer confirmed DNC - Ending call")
+        
+        # IMPORTANT: Move to GOODBYE and end conversation
+        session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
@@ -270,12 +318,13 @@ class VoiceProcessor:
             conversation_stage=ConversationStage.GOODBYE,
             end_conversation=True,
             outcome="dnc_requested",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="dnc_requested"
         )
     
     async def _handle_maybe_response(self, session: CallSession, start_time: float) -> Dict[str, Any]:
         """Handle uncertain responses"""
-        logger.info("🤔 Customer uncertain")
+        logger.info("🤔 Customer uncertain - Asking for clarification")
         
         return await self._create_response(
             response_text=(
@@ -288,12 +337,13 @@ class VoiceProcessor:
             conversation_stage=session.conversation_stage,  # Stay in same stage
             end_conversation=False,
             outcome="clarification_needed",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="maybe"
         )
     
     async def _handle_unclear_response(self, session: CallSession, start_time: float, context: str) -> Dict[str, Any]:
         """Handle unclear responses based on context"""
-        logger.info(f"❓ Unclear response in {context}")
+        logger.info(f"❓ Unclear response in {context} - Asking for clarification")
         
         if context == "greeting":
             text = (
@@ -308,20 +358,26 @@ class VoiceProcessor:
                 f"{agent_name}'s available times for a brief consultation? "
                 f"Just say yes if you'd like that, or no if you're not interested."
             )
-        else:
+        elif context == "dnc_check":
             text = (
                 "I want to make sure I understand correctly. "
                 "Would you like to continue receiving health insurance updates from us? "
                 "Please say yes or no."
             )
+        else:
+            text = (
+                "I apologize, I didn't understand that. "
+                "Could you please repeat your response?"
+            )
         
         return await self._create_response(
             response_text=text,
             response_category="clarification",
-            conversation_stage=session.conversation_stage,
+            conversation_stage=session.conversation_stage,  # Stay in same stage
             end_conversation=False,
             outcome="clarification_needed",
-            start_time=start_time
+            start_time=start_time,
+            detected_intent="unclear"
         )
     
     async def _create_response(
@@ -331,11 +387,12 @@ class VoiceProcessor:
         conversation_stage: ConversationStage,
         end_conversation: bool,
         outcome: str,
-        start_time: float
+        start_time: float,
+        detected_intent: str = None
     ) -> Dict[str, Any]:
         """Create standardized response"""
         
-        # Update session stage
+        # Update session stage - ensure it's the value string
         if hasattr(conversation_stage, 'value'):
             stage_value = conversation_stage.value
         else:
@@ -349,7 +406,7 @@ class VoiceProcessor:
             "end_conversation": end_conversation,
             "outcome": outcome,
             "processing_time_ms": int((time.time() - start_time) * 1000),
-            "detected_intent": outcome
+            "detected_intent": detected_intent or outcome
         }
     
     async def _create_error_response(self, start_time: float) -> Dict[str, Any]:
@@ -358,14 +415,65 @@ class VoiceProcessor:
             "success": False,
             "response_text": "I apologize, I'm having some technical difficulties. Thank you for your patience.",
             "response_category": "error",
+            "conversation_stage": "goodbye",
             "end_conversation": True,
             "outcome": "error",
-            "processing_time_ms": int((time.time() - start_time) * 1000)
+            "processing_time_ms": int((time.time() - start_time) * 1000),
+            "detected_intent": "error"
         }
     
     def get_current_time(self) -> float:
         """Get current time for latency tracking"""
         return time.time()
+    
+    async def _schedule_meeting_async(self, session: CallSession, agent_name: str):
+        """Schedule meeting asynchronously without blocking the call"""
+        try:
+            # Get client information
+            client_name = session.client_data.get("client_name", "Client")
+            client_phone = session.phone_number
+            
+            # Try to get client email from database
+            client_email = None
+            try:
+                from shared.utils.database import get_client_by_phone
+                client = await get_client_by_phone(client_phone)
+                if client and hasattr(client.client, 'email'):
+                    client_email = client.client.email
+            except Exception as e:
+                logger.warning(f"Could not get client email: {e}")
+            
+            # If no email, use a placeholder
+            if not client_email:
+                client_email = f"{client_name.lower().replace(' ', '.')}@example.com"
+            
+            # Get agent email from agents config
+            agent_email = None
+            try:
+                import json
+                with open("data/agents.json", 'r') as f:
+                    agents_config = json.load(f)
+                    for agent in agents_config.get("agents", []):
+                        if agent.get("name") == agent_name:
+                            agent_email = agent.get("email")
+                            break
+            except Exception as e:
+                logger.warning(f"Could not load agents config: {e}")
+            
+            if not agent_email:
+                logger.warning(f"Agent email not found for {agent_name}")
+                return
+            
+            # Schedule the meeting using the worker service
+            # This will be handled by the worker service that has access to Google Calendar
+            logger.info(f"📅 Scheduling meeting for {client_name} with {agent_name} ({agent_email})")
+            
+            # For now, we'll just log that scheduling should happen
+            # In a full implementation, this would send a message to a queue or make an API call
+            # to the worker service to handle the actual calendar scheduling
+            
+        except Exception as e:
+            logger.error(f"❌ Error in async meeting scheduling: {e}")
     
     async def close(self):
         """Close HTTP client"""

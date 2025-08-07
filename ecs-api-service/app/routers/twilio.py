@@ -84,19 +84,63 @@ async def get_client_by_phone(phone: str) -> Optional[Client]:
         logger.error(f"Failed to get client by phone {phone}: {e}")
         return None
 
+
 async def cache_session(session: CallSession):
-    """Cache session with error handling"""
+    """Cache session with proper twilio_call_sid setting"""
     try:
+        # Ensure twilio_call_sid is set (was causing duplicate key errors)
+        if not session.twilio_call_sid and hasattr(session, 'CallSid'):
+            session.twilio_call_sid = session.CallSid
+        
+        # Additional validation to prevent null twilio_call_sid
+        if not session.twilio_call_sid:
+            logger.error(f"❌ Cannot cache session {session.session_id}: twilio_call_sid is None")
+            return
+        
+        # Try Redis cache first
         from shared.utils.redis_client import session_cache
         if session_cache:
             await session_cache.save_session(session)
-            
-        # Also save to database
+            logger.info(f"✅ Session cached in Redis: {session.session_id} (twilio_call_sid: {session.twilio_call_sid})")
+        
+        # Also save to database - but handle duplicate key errors
         session_repo = await get_session_repo()
         if session_repo:
-            await session_repo.save_session(session)
+            try:
+                # Ensure twilio_call_sid is properly set
+                if not session.twilio_call_sid:
+                    logger.warning(f"⚠️ Session {session.session_id} has no twilio_call_sid")
+                    return
+                
+                await session_repo.save_session(session)
+                logger.info(f"✅ Session saved to database: {session.session_id}")
+            except Exception as e:
+                if "duplicate key" in str(e):
+                    # Try to update instead
+                    logger.warning(f"⚠️ Duplicate key, attempting update: {e}")
+                    from shared.utils.database import db_client
+                    if db_client is not None and db_client.database is not None:
+                        # Try by session_id first, then by twilio_call_sid
+                        try:
+                            await db_client.database.call_sessions.replace_one(
+                                {"session_id": session.session_id},
+                                session.dict(by_alias=True),
+                                upsert=True
+                            )
+                            logger.info(f"✅ Session updated via upsert: {session.session_id}")
+                        except Exception as upsert_error:
+                            logger.error(f"❌ Upsert failed: {upsert_error}")
+                            # Try to delete and re-insert
+                            try:
+                                await db_client.database.call_sessions.delete_one({"twilio_call_sid": session.twilio_call_sid})
+                                await session_repo.save_session(session)
+                                logger.info(f"✅ Session re-saved after cleanup: {session.session_id}")
+                            except Exception as cleanup_error:
+                                logger.error(f"❌ Cleanup failed: {cleanup_error}")
+                else:
+                    logger.error(f"❌ Failed to save session to database: {e}")
     except Exception as e:
-        logger.error(f"Failed to cache session: {e}")
+        logger.error(f"❌ Failed to cache session: {e}")
 
 async def get_cached_session(call_sid: str) -> Optional[CallSession]:
     """Get cached session with fallback to database"""
@@ -117,7 +161,7 @@ async def get_cached_session(call_sid: str) -> Optional[CallSession]:
         if session_repo:
             # Search by twilio_call_sid
             from shared.utils.database import db_client
-            if db_client and db_client.database:
+            if db_client is not None and db_client.database is not None:
                 doc = await db_client.database.call_sessions.find_one({"twilio_call_sid": call_sid})
                 if doc:
                     return CallSession(**doc)
@@ -214,17 +258,20 @@ async def voice_webhook(
     CallStatus: Optional[str] = Form(None),
     From: Optional[str] = Form(None),
     To: Optional[str] = Form(None),
-    Direction: Optional[str] = Form(None)
+    Direction: Optional[str] = Form(None),
+    is_test_call: Optional[str] = Form(None)
 ):
     """Handle incoming voice calls with complete AAG conversation flow"""
     
-    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From} - To: {To} - Direction: {Direction}")
+    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From} - To: {To} - Direction: {Direction} - is_test_call: {is_test_call}")
     
     try:
         if CallStatus == "in-progress":
             # Determine client phone based on call direction
             client_phone = To if Direction == "outbound-api" else From
             logger.info(f"🔍 Looking up client by phone: {client_phone}")
+            form_data = await request.form()
+            logger.info(f"All form data: {dict(form_data)}")
             
             # Initialize client data with defaults
             client_data = {
@@ -247,22 +294,34 @@ async def voice_webhook(
             else:
                 logger.warning(f"⚠️ Client not found for phone: {client_phone}")
             
-            # Create new session
-            session = CallSession(
-                session_id=str(uuid.uuid4()),
-                twilio_call_sid=CallSid,
-                client_id=str(client.id) if client else "unknown",
-                phone_number=client_phone,
-                lyzr_agent_id=settings.lyzr_conversation_agent_id,
-                lyzr_session_id=f"voice-{CallSid}-{uuid.uuid4().hex[:8]}",
-                client_data=client_data,
-                is_test_call=client_phone.startswith("+1555") if client_phone else False
-            )
+            # Check if there's already a cached session for this call (e.g., from test call creation)
+            cached_session = await get_cached_session(CallSid)
             
-            # Set initial session state
-            session.call_status = CallStatusEnum.IN_PROGRESS
-            session.answered_at = datetime.utcnow()
-            session.conversation_stage = ConversationStage.GREETING
+            if cached_session:
+                # Use the cached session and update it
+                session = cached_session
+                session.call_status = CallStatusEnum.IN_PROGRESS
+                session.answered_at = datetime.utcnow()
+                session.conversation_stage = ConversationStage.GREETING
+                logger.info(f"✅ Using cached session for {CallSid}, is_test_call: {session.is_test_call}")
+            else:
+                # Create new session
+                session = CallSession(
+                    session_id=str(uuid.uuid4()),
+                    twilio_call_sid=CallSid,
+                    client_id=str(client.id) if client else "unknown",
+                    phone_number=client_phone,
+                    lyzr_agent_id=settings.lyzr_conversation_agent_id,
+                    lyzr_session_id=f"voice-{CallSid}-{uuid.uuid4().hex[:8]}",
+                    client_data=client_data,
+                    is_test_call=(is_test_call == "true") or (client_phone.startswith("+1555") if client_phone else False)
+                )
+                
+                # Set initial session state
+                session.no_speech_count = 0
+                session.call_status = CallStatusEnum.IN_PROGRESS
+                session.answered_at = datetime.utcnow()
+                session.conversation_stage = ConversationStage.GREETING
             
             # Store session
             active_sessions[CallSid] = session
@@ -303,153 +362,6 @@ async def voice_webhook(
             media_type="application/xml"
         )
 
-# @router.post("/process-speech")
-# async def process_speech_webhook(
-#     request: Request,
-#     CallSid: str = Form(...),
-#     SpeechResult: Optional[str] = Form(None),
-#     Confidence: Optional[float] = Form(None),
-#     UnstableSpeechResult: Optional[str] = Form(None)
-# ):
-#     """Process customer speech with complete conversation handling"""
-    
-#     # Use UnstableSpeechResult if SpeechResult is empty
-#     if not SpeechResult and UnstableSpeechResult:
-#         SpeechResult = UnstableSpeechResult
-#         logger.info(f"🎤 Using unstable speech result: '{SpeechResult}'")
-    
-#     logger.info(f"🎤 Processing speech: {CallSid} - Result: '{SpeechResult}' - Confidence: {Confidence}")
-    
-#     try:
-#         # Get session
-#         session = active_sessions.get(CallSid)
-#         if not session:
-#             session = await get_cached_session(CallSid)
-#             if session:
-#                 active_sessions[CallSid] = session
-#                 logger.info(f"✅ Restored session from cache: {CallSid}")
-        
-#         if not session:
-#             logger.error(f"❌ Session not found: {CallSid}")
-#             return Response(
-#                 content=create_hangup_twiml("I'm sorry, there was an error with your session. Please call back."),
-#                 media_type="application/xml"
-#             )
-        
-#         # Handle no speech detected
-#         if not SpeechResult:
-#             logger.warning(f"⚠️ No speech detected for {CallSid}")
-            
-#             # Increment no-speech counter
-#             if not hasattr(session, 'no_speech_count'):
-#                 session.no_speech_count = 0
-#             session.no_speech_count += 1
-            
-#             if session.no_speech_count >= 3:
-#                 # Too many no-speech attempts
-#                 return await create_hybrid_twiml_response(
-#                     response_type="goodbye",
-#                     text="I'm having trouble hearing you. Please call us back when you're in a quieter location. Thank you!",
-#                     client_data=session.client_data,
-#                     should_hangup=True
-#                 )
-#             else:
-#                 # Ask them to repeat
-#                 return await create_hybrid_twiml_response(
-#                     response_type="clarification",
-#                     text="I didn't catch that. Could you please repeat your response?",
-#                     client_data=session.client_data
-#                 )
-        
-#         # Reset no-speech counter on successful speech
-#         session.no_speech_count = 0
-        
-#         # Process speech using voice processor
-#         process_result = await voice_processor.process_customer_input(
-#             customer_input=SpeechResult,
-#             session=session,
-#             confidence=Confidence or 0.0
-#         )
-        
-#         # Log processing result
-#         logger.info(f"🔄 Processing result: {process_result.get('response_category', 'unknown')} - "
-#                    f"End: {process_result.get('end_conversation', False)} - "
-#                    f"Outcome: {process_result.get('outcome', 'unknown')}")
-        
-#         # Update session with conversation turn
-#         turn = ConversationTurn(
-#             turn_number=len(session.conversation_turns) + 1 if session.conversation_turns else 1,
-#             customer_speech=SpeechResult,
-#             customer_speech_confidence=Confidence or 0.0,
-#             agent_response=process_result.get("response_text", ""),
-#             response_type=ResponseType.HYBRID if process_result.get("lyzr_used") else ResponseType.STATIC,
-#             conversation_stage=session.conversation_stage,
-#             processing_time_ms=process_result.get("processing_time_ms", 0)
-#         )
-        
-#         if not session.conversation_turns:
-#             session.conversation_turns = []
-#         session.conversation_turns.append(turn)
-#         session.current_turn_number = turn.turn_number
-        
-#         # Update conversation stage if provided
-#         new_stage = process_result.get("conversation_stage")
-#         if new_stage:
-#             session.conversation_stage = ConversationStage(new_stage)
-        
-#         # Save session state
-#         await cache_session(session)
-        
-#         # Check if conversation should end
-#         if process_result.get("end_conversation", False):
-#             # Set final outcome
-#             session.final_outcome = process_result.get("outcome", "completed")
-#             session.complete_call(session.final_outcome)
-            
-#             # Update client record
-#             client = await get_client_by_phone(session.phone_number)
-#             if client:
-#                 await update_client_record(
-#                     session=session,
-#                     outcome=session.final_outcome,
-#                     client=client
-#                 )
-            
-#             # End LYZR session
-#             if lyzr_client.is_configured():
-#                 lyzr_client.end_session(session.lyzr_session_id)
-            
-#             # Save final session state
-#             await cache_session(session)
-            
-#             # Return final response
-#             return await create_hybrid_twiml_response(
-#                 response_type=process_result.get("response_category", "goodbye"),
-#                 text=process_result.get("response_text"),
-#                 client_data=session.client_data,
-#                 should_hangup=True
-#             )
-#         else:
-#             # Continue conversation
-#             return await create_hybrid_twiml_response(
-#                 response_type=process_result.get("response_category", "dynamic"),
-#                 text=process_result.get("response_text"),
-#                 client_data=session.client_data,
-#                 gather_action="/twilio/process-speech"
-#             )
-        
-#     except Exception as e:
-#         logger.error(f"❌ Speech processing error: {e}")
-#         import traceback
-#         logger.error(traceback.format_exc())
-        
-#         # Return error response
-#         return await create_hybrid_twiml_response(
-#             response_type="goodbye",
-#             text="I apologize, but I'm experiencing technical difficulties. Please call us back later.",
-#             should_hangup=True
-#         )
-# corrected_process_speech_webhook in twilio.py
 
 @router.post("/process-speech")
 async def process_speech_webhook(
@@ -484,6 +396,10 @@ async def process_speech_webhook(
                 media_type="application/xml"
             )
         
+        # Initialize no_speech_count if not present
+        if not hasattr(session, 'no_speech_count'):
+            session.no_speech_count = 0
+        
         # Handle no speech detected
         if not SpeechResult:
             logger.warning(f"⚠️ No speech detected for {CallSid}")
@@ -491,6 +407,10 @@ async def process_speech_webhook(
             
             if session.no_speech_count >= 2:
                 logger.warning(f"⚠️ Too many no-speech attempts. Ending call {CallSid}.")
+                session.final_outcome = "no_answer"
+                session.conversation_stage = ConversationStage.GOODBYE
+                await cache_session(session)
+                
                 return await create_hybrid_twiml_response(
                     response_type="goodbye",
                     text="We seem to be having trouble hearing you. We will try reaching out later. Goodbye.",
@@ -506,7 +426,7 @@ async def process_speech_webhook(
         
         session.no_speech_count = 0
         
-        # Process the speech using your voice processor service
+        # Process the speech using the fixed voice processor
         process_result = await voice_processor.process_customer_input(
             customer_input=SpeechResult,
             session=session,
@@ -515,28 +435,54 @@ async def process_speech_webhook(
         
         logger.info(f"🔄 Processing result: {process_result}")
         
-        # FIXED: Correctly determine the enum member before creating the turn
+        # IMPORTANT: Update session's conversation stage from the result
+        new_stage_value = process_result.get("conversation_stage")
+        if new_stage_value:
+            try:
+                session.conversation_stage = ConversationStage(new_stage_value)
+                logger.info(f"📍 Updated session stage to: {session.conversation_stage.value}")
+            except ValueError:
+                logger.warning(f"⚠️ Invalid stage value: {new_stage_value}")
+        
+        # Create conversation turn with proper enum handling
         response_type_enum = ResponseType.HYBRID if process_result.get("lyzr_used") else ResponseType.STATIC
         
         turn = ConversationTurn(
-            turn_number=len(session.conversation_turns) + 1,
+            turn_number=len(session.conversation_turns) + 1 if session.conversation_turns else 1,
             customer_speech=SpeechResult,
             customer_speech_confidence=Confidence or 0.0,
             agent_response=process_result.get("response_text", ""),
-            response_type=response_type_enum, # Use the corrected enum object
+            response_type=response_type_enum,
             conversation_stage=session.conversation_stage,
             processing_time_ms=process_result.get("processing_time_ms", 0)
         )
         
+        if not session.conversation_turns:
+            session.conversation_turns = []
         session.conversation_turns.append(turn)
+        session.current_turn_number = turn.turn_number
         
-        # Save the updated session state to cache
+        # Update final outcome if provided
+        if process_result.get("outcome"):
+            session.final_outcome = process_result["outcome"]
+        
+        # Save the updated session state to cache BEFORE creating response
         await cache_session(session)
         
         # Check if the conversation should end
         if process_result.get("end_conversation", False):
-            session.final_outcome = process_result.get("outcome", "completed")
-            logger.info(f"🎬 Conversation marked to end for {CallSid}. Outcome: {session.final_outcome}")
+            logger.info(f"🎬 Conversation ending for {CallSid}. Outcome: {session.final_outcome}")
+            
+            # Mark session as completed
+            session.call_status = CallStatusEnum.COMPLETED
+            session.complete_call(session.final_outcome)
+            
+            # Save final state
+            await cache_session(session)
+            
+            # Remove from active sessions (will be cleaned up in status webhook)
+            # But keep it for now to track completion
+            
             return await create_hybrid_twiml_response(
                 response_type=process_result.get("response_category", "goodbye"),
                 text=process_result.get("response_text"),
@@ -559,6 +505,117 @@ async def process_speech_webhook(
             text="I apologize, we have encountered a system error. Please call back later. Goodbye.",
             should_hangup=True
         )
+
+# @router.post("/process-speech")
+# async def process_speech_webhook(
+#     request: Request,
+#     CallSid: str = Form(...),
+#     SpeechResult: Optional[str] = Form(None),
+#     Confidence: Optional[float] = Form(None),
+#     UnstableSpeechResult: Optional[str] = Form(None)
+# ):
+#     """Process customer speech with complete conversation handling"""
+    
+#     # Use UnstableSpeechResult if SpeechResult is empty for better responsiveness
+#     if not SpeechResult and UnstableSpeechResult:
+#         SpeechResult = UnstableSpeechResult
+#         logger.info(f"🎤 Using unstable speech result: '{SpeechResult}'")
+    
+#     logger.info(f"🎤 Processing speech: {CallSid} - Result: '{SpeechResult}' - Confidence: {Confidence}")
+    
+#     try:
+#         # Get the session from active memory or fall back to cache
+#         session = active_sessions.get(CallSid)
+#         if not session:
+#             session = await get_cached_session(CallSid)
+#             if session:
+#                 active_sessions[CallSid] = session
+#                 logger.info(f"✅ Restored session from cache: {CallSid}")
+        
+#         if not session:
+#             logger.error(f"❌ CRITICAL: Session not found for CallSid: {CallSid}. Cannot continue.")
+#             return Response(
+#                 content=create_hangup_twiml("I'm sorry, there was a problem with the call. Please call us back."),
+#                 media_type="application/xml"
+#             )
+        
+#         # Handle no speech detected
+#         if not SpeechResult:
+#             logger.warning(f"⚠️ No speech detected for {CallSid}")
+#             session.no_speech_count += 1
+            
+#             if session.no_speech_count >= 2:
+#                 logger.warning(f"⚠️ Too many no-speech attempts. Ending call {CallSid}.")
+#                 return await create_hybrid_twiml_response(
+#                     response_type="goodbye",
+#                     text="We seem to be having trouble hearing you. We will try reaching out later. Goodbye.",
+#                     client_data=session.client_data,
+#                     should_hangup=True
+#                 )
+#             else:
+#                 return await create_hybrid_twiml_response(
+#                     response_type="clarification",
+#                     text="I'm sorry, I didn't catch that. Could you please say that again?",
+#                     client_data=session.client_data
+#                 )
+        
+#         session.no_speech_count = 0
+        
+#         # Process the speech using your voice processor service
+#         process_result = await voice_processor.process_customer_input(
+#             customer_input=SpeechResult,
+#             session=session,
+#             confidence=Confidence or 0.0
+#         )
+        
+#         logger.info(f"🔄 Processing result: {process_result}")
+        
+#         # FIXED: Correctly determine the enum member before creating the turn
+#         response_type_enum = ResponseType.HYBRID if process_result.get("lyzr_used") else ResponseType.STATIC
+        
+#         turn = ConversationTurn(
+#             turn_number=len(session.conversation_turns) + 1,
+#             customer_speech=SpeechResult,
+#             customer_speech_confidence=Confidence or 0.0,
+#             agent_response=process_result.get("response_text", ""),
+#             response_type=response_type_enum, # Use the corrected enum object
+#             conversation_stage=session.conversation_stage,
+#             processing_time_ms=process_result.get("processing_time_ms", 0)
+#         )
+        
+#         session.conversation_turns.append(turn)
+        
+#         # Save the updated session state to cache
+#         await cache_session(session)
+        
+#         # Check if the conversation should end
+#         if process_result.get("end_conversation", False):
+#             session.final_outcome = process_result.get("outcome", "completed")
+#             logger.info(f"🎬 Conversation marked to end for {CallSid}. Outcome: {session.final_outcome}")
+#             return await create_hybrid_twiml_response(
+#                 response_type=process_result.get("response_category", "goodbye"),
+#                 text=process_result.get("response_text"),
+#                 client_data=session.client_data,
+#                 should_hangup=True
+#             )
+#         else:
+#             # Continue the conversation
+#             return await create_hybrid_twiml_response(
+#                 response_type=process_result.get("response_category", "dynamic"),
+#                 text=process_result.get("response_text"),
+#                 client_data=session.client_data
+#             )
+            
+#     except Exception as e:
+#         logger.error(f"❌ Unrecoverable error in speech processing for {CallSid}: {e}", exc_info=True)
+#         # Fallback to a generic error message and hang up
+#         return await create_hybrid_twiml_response(
+#             response_type="error",
+#             text="I apologize, we have encountered a system error. Please call back later. Goodbye.",
+#             should_hangup=True
+#         )
+
+
 async def update_client_record(session: CallSession, outcome: str, client: Client):
     """Update client record with call outcome and details"""
     try:
@@ -689,59 +746,141 @@ async def status_webhook(
     CallDuration: Optional[str] = Form(None),
     RecordingUrl: Optional[str] = Form(None)
 ):
-    """Handle call status updates with summary generation"""
+    """Handle call status updates with proper cleanup"""
     
     logger.info(f"📊 Status update: {CallSid} - Status: {CallStatus} - Duration: {CallDuration}")
     
     try:
         # Handle call completion
         if CallStatus in ["completed", "failed", "busy", "no-answer"]:
-            # Get session
+            # Get session from active or cache
             session = active_sessions.get(CallSid)
             if not session:
                 session = await get_cached_session(CallSid)
             
             if session:
+                # Update call status
+                if CallStatus == "completed":
+                    session.call_status = CallStatusEnum.COMPLETED
+                elif CallStatus == "failed":
+                    session.call_status = CallStatusEnum.FAILED
+                elif CallStatus == "busy":
+                    session.call_status = CallStatusEnum.BUSY
+                elif CallStatus == "no-answer":
+                    session.call_status = CallStatusEnum.NO_ANSWER
+                
                 # Update duration
                 if CallDuration:
                     try:
                         duration = int(CallDuration)
-                        if session.session_metrics:
-                            session.session_metrics.total_call_duration_seconds = duration
+                        if not session.session_metrics:
+                            from shared.models.call_session import SessionMetrics
+                            session.session_metrics = SessionMetrics()
+                        session.session_metrics.total_call_duration_seconds = duration
                     except ValueError:
                         logger.warning(f"Invalid call duration: {CallDuration}")
                 
-                # Set appropriate outcome based on status
-                if CallStatus == "completed" and not session.final_outcome:
-                    session.final_outcome = "completed"
-                elif CallStatus == "no-answer":
-                    session.final_outcome = "no_answer"
-                elif CallStatus in ["busy", "failed"]:
-                    session.final_outcome = "failed"
+                # Set appropriate outcome based on status if not already set
+                if not session.final_outcome:
+                    if CallStatus == "completed":
+                        # If completed but no outcome, check conversation stage
+                        if session.conversation_stage == ConversationStage.GOODBYE:
+                            session.final_outcome = "completed"
+                        else:
+                            session.final_outcome = "incomplete"
+                    elif CallStatus == "no-answer":
+                        session.final_outcome = "no_answer"
+                    elif CallStatus in ["busy", "failed"]:
+                        session.final_outcome = "failed"
                 
                 # Complete the call
                 session.complete_call(session.final_outcome)
+                session.completed_at = datetime.utcnow()
                 
-                # Get client for summary
+                # Get client for summary and update
                 client = await get_client_by_phone(session.phone_number)
                 
-                # Generate call summary
-                await generate_and_save_call_summary(session, client)
+                # Generate call summary if there were conversation turns
+                if session.conversation_turns and len(session.conversation_turns) > 0:
+                    await generate_and_save_call_summary(session, client)
                 
                 # Update client record if we have one
                 if client and session.final_outcome:
                     await update_client_record(session, session.final_outcome, client)
                 
-                # Final save
-                await cache_session(session)
+                # Final save to database with all updates
+                session_repo = await get_session_repo()
+                if session_repo:
+                    try:
+                        # Ensure twilio_call_sid is not None
+                        if not session.twilio_call_sid:
+                            session.twilio_call_sid = CallSid
+                        
+                        # Use the session repository's save method which handles the document properly
+                        success = await session_repo.save_session(session)
+                        if success:
+                            logger.info(f"✅ Final session saved to database: {CallSid}")
+                        else:
+                            logger.error(f"❌ Failed to save session to database: {CallSid}")
+                    except Exception as e:
+                        logger.error(f"❌ Database save error for {CallSid}: {e}")
+                        # Fallback: try direct database operation with proper document structure
+                        try:
+                            from shared.utils.database import db_client
+                            if db_client is not None and db_client.database is not None:
+                                # Create document dict without _id field to avoid immutable field error
+                                session_dict = session.model_dump()
+                                # Remove _id if it exists to prevent immutable field error
+                                if "_id" in session_dict:
+                                    del session_dict["_id"]
+                                
+                                # Use upsert to handle both insert and update
+                                await db_client.database.call_sessions.replace_one(
+                                    {"twilio_call_sid": CallSid},
+                                    session_dict,
+                                    upsert=True
+                                )
+                                logger.info(f"✅ Fallback session save successful: {CallSid}")
+                        except Exception as fallback_error:
+                            logger.error(f"❌ Fallback save also failed for {CallSid}: {fallback_error}")
+                
+                # Clean up from Redis cache
+                from shared.utils.redis_client import session_cache
+                if session_cache:
+                    try:
+                        # Remove from Redis by call SID
+                        await session_cache.delete_session(CallSid)
+                        logger.info(f"🗑️ Removed session from Redis cache: {CallSid}")
+                    except Exception as e:
+                        logger.warning(f"Could not remove from Redis: {e}")
                 
                 # Clean up active session
                 if CallSid in active_sessions:
                     del active_sessions[CallSid]
+                    logger.info(f"🗑️ Removed from active sessions: {CallSid}")
                 
                 logger.info(f"✅ Call completed: {CallSid} - Outcome: {session.final_outcome} - Duration: {CallDuration}s")
             else:
                 logger.warning(f"⚠️ No session found for completed call: {CallSid}")
+        
+        # Handle other status updates (initiated, ringing, in-progress)
+        else:
+            # Update session status if it exists
+            session = active_sessions.get(CallSid)
+            if not session:
+                session = await get_cached_session(CallSid)
+            
+            if session:
+                if CallStatus == "initiated":
+                    session.call_status = CallStatusEnum.INITIATED
+                elif CallStatus == "ringing":
+                    session.call_status = CallStatusEnum.RINGING
+                elif CallStatus == "in-progress":
+                    session.call_status = CallStatusEnum.IN_PROGRESS
+                
+                # Save updated status
+                await cache_session(session)
+                logger.info(f"📞 Call status updated: {CallSid} -> {CallStatus}")
         
         return {"status": "ok", "call_sid": CallSid, "call_status": CallStatus}
         

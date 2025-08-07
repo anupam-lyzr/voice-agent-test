@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     twilio_phone_number: str = Field(default="")
     
     # AI Service API Keys
-    deepgram_api_key: str = Field(default="")
+    deepgram_api_key: str = Field(default="", env="DEEPGRAM_API_KEY")
     elevenlabs_api_key: str = Field(default="")
     
     # LYZR Configuration
@@ -100,8 +100,8 @@ class Settings(BaseSettings):
     base_url: str = Field(default="http://localhost:8000")
     tts_model: str = Field(default="eleven_turbo_v2_5")
     tts_output_format: str = Field(default="mp3_22050_32")
-    stt_model: str = Field(default="nova-2")
-    stt_language: str = Field(default="en-US")
+    stt_model: str = Field(default="nova", env="STT_MODEL")
+    stt_language: str = Field(default="en-US", env="STT_LANGUAGE")
     
     class Config:
         env_file = ".env"
