@@ -41,319 +41,275 @@ class EmailService:
         # Email statistics
         self.emails_sent = 0
         self.emails_failed = 0
-    
-    async def send_agent_assignment_email(
-        self, 
-        agent_email: str, 
-        agent_name: str, 
-        client_info: Dict[str, Any], 
-        call_summary: Dict[str, Any]
-    ) -> bool:
-        """Send email notification to agent about new client assignment"""
-        
-        subject = f"New Lead Assigned - {client_info.get('name', 'Unknown Client')}"
-        
-        # Create email content
-        html_content = self._create_assignment_email_html(agent_name, client_info, call_summary)
-        text_content = self._create_assignment_email_text(agent_name, client_info, call_summary)
-        
-        return await self._send_email(
-            to_email=agent_email,
-            subject=subject,
-            html_content=html_content,
-            text_content=text_content
-        )
-    
-    async def send_meeting_confirmation_email(
-        self,
-        client_email: str,
-        client_name: str,
-        agent_name: str,
-        meeting_details: Dict[str, Any]
-    ) -> bool:
-        """Send meeting confirmation email to client"""
-        
-        subject = f"Discovery Call Scheduled - {agent_name} from Altrius Advisor Group"
-        
-        # Create email content
-        html_content = self._create_confirmation_email_html(client_name, agent_name, meeting_details)
-        text_content = self._create_confirmation_email_text(client_name, agent_name, meeting_details)
-        
-        return await self._send_email(
-            to_email=client_email,
-            subject=subject,
-            html_content=html_content,
-            text_content=text_content
-        )
-    
-    async def send_no_contact_followup_email(
-        self,
-        client_email: str,
-        client_name: str
-    ) -> bool:
-        """Send follow-up email when client couldn't be reached"""
-        
-        subject = "We Tried to Reach You - Altrius Advisor Group"
-        
-        html_content = f"""
-        <html>
-        <body>
-            <h2>Hello {client_name},</h2>
-            
-            <p>We recently attempted to contact you regarding your insurance coverage options during Open Enrollment, but we weren't able to reach you.</p>
-            
-            <p>We'd still love to help you find the best insurance options for your needs. If you're interested in learning more about:</p>
-            
-            <ul>
-                <li>Health Insurance Plans</li>
-                <li>Medicare Options</li>
-                <li>Dental and Vision Coverage</li>
-                <li>Life Insurance</li>
-            </ul>
-            
-            <p>Please reply to this email or call us at <strong>{getattr(settings, 'twilio_phone_number', '(555) 123-4567')}</strong></p>
-            
-            <p>Best regards,<br>
-            The Altrius Advisor Group Team</p>
-            
-            <hr>
-            <p style="font-size: 12px; color: #666;">
-                If you no longer wish to receive communications from us, please reply with "UNSUBSCRIBE" in the subject line.
-            </p>
-        </body>
-        </html>
-        """
-        
-        text_content = f"""
-        Hello {client_name},
 
-        We recently attempted to contact you regarding your insurance coverage options during Open Enrollment, but we weren't able to reach you.
+    def is_configured(self) -> bool:
+        """Check if email service is properly configured"""
+        return self.ses_client is not None
 
-        We'd still love to help you find the best insurance options for your needs. If you're interested in learning more about Health Insurance Plans, Medicare Options, Dental and Vision Coverage, or Life Insurance, please reply to this email or call us at {getattr(settings, 'twilio_phone_number', '(555) 123-4567')}.
+    async def send_conversation_stage_email(self, client_email: str, client_name: str, stage: str, call_summary: Dict[str, Any]) -> bool:
+        """Send email based on conversation stage"""
+        try:
+            email_templates = {
+                "interested": {
+                    "subject": "Thank you for your interest in our services!",
+                    "body": f"""
+Dear {client_name},
 
-        Best regards,
-        The Altrius Advisor Group Team
+Thank you for your interest in our services! We're excited to work with you.
 
-        If you no longer wish to receive communications from us, please reply with "UNSUBSCRIBE" in the subject line.
-        """
-        
-        return await self._send_email(
-            to_email=client_email,
-            subject=subject,
-            html_content=html_content,
-            text_content=text_content
-        )
-    
-    def _create_assignment_email_html(self, agent_name: str, client_info: Dict, call_summary: Dict) -> str:
-        """Create HTML content for agent assignment email"""
-        
-        meeting_time = call_summary.get('meeting_time', 'Not scheduled')
-        
-        return f"""
-        <html>
-        <body>
-            <h2>New Lead Assignment</h2>
+Based on our conversation, here are the key points we discussed:
+{self._format_key_points(call_summary.get('key_points', []))}
+
+Next Steps:
+- Our team will review your requirements
+- We'll schedule a follow-up call within 24-48 hours
+- You'll receive calendar invites for available time slots
+
+If you have any immediate questions, please don't hesitate to reach out.
+
+Best regards,
+The Altruis Team
+                    """.strip()
+                },
+                "not_interested": {
+                    "subject": "Thank you for your time",
+                    "body": f"""
+Dear {client_name},
+
+Thank you for taking the time to speak with us today. We appreciate your consideration.
+
+We understand that our services may not be the right fit for you at this time. If your circumstances change in the future, we'd be happy to hear from you.
+
+We've noted your preferences and will respect your decision.
+
+Best regards,
+The Altruis Team
+                    """.strip()
+                },
+                "follow_up": {
+                    "subject": "Follow-up on our conversation",
+                    "body": f"""
+Dear {client_name},
+
+Thank you for our recent conversation. We wanted to follow up on the points we discussed.
+
+Key Discussion Points:
+{self._format_key_points(call_summary.get('key_points', []))}
+
+Customer Concerns Addressed:
+{self._format_concerns(call_summary.get('customer_concerns', []))}
+
+We're here to help address any questions you may have. Please feel free to reach out if you'd like to discuss further.
+
+Best regards,
+The Altruis Team
+                    """.strip()
+                },
+                "meeting_scheduled": {
+                    "subject": "Meeting Confirmation - Discovery Call",
+                    "body": f"""
+Dear {client_name},
+
+Your discovery call has been scheduled successfully!
+
+Meeting Details:
+- Date: {call_summary.get('meeting_time', 'TBD')}
+- Duration: 30 minutes
+- Format: Video call (link will be sent separately)
+
+What to expect:
+- Detailed discussion of your needs
+- Custom solution recommendations
+- Q&A session
+- Next steps planning
+
+Please let us know if you need to reschedule or have any questions.
+
+Best regards,
+The Altruis Team
+                    """.strip()
+                }
+            }
+
+            template = email_templates.get(stage)
+            if not template:
+                logger.warning(f"Unknown conversation stage: {stage}")
+                return False
+
+            success = await self._send_email(
+                to_email=client_email,
+                subject=template["subject"],
+                body=template["body"]
+            )
+
+            if success:
+                logger.info(f"✅ {stage} email sent to {client_email}")
+                self.emails_sent += 1
+            else:
+                logger.error(f"❌ Failed to send {stage} email to {client_email}")
+                self.emails_failed += 1
+
+            return success
+
+        except Exception as e:
+            logger.error(f"❌ Error sending conversation stage email: {e}")
+            self.emails_failed += 1
+            return False
+
+    async def send_agent_assignment_email(self, agent_email: str, agent_name: str, client_info: Dict[str, Any], call_summary: Dict[str, Any]) -> bool:
+        """Send email notification to agent about new assignment"""
+        try:
+            subject = f"New Client Assignment - {client_info.get('client_name', 'Unknown Client')}"
             
-            <p>Hello {agent_name},</p>
+            body = f"""
+Dear {agent_name},
+
+You have been assigned a new client based on their recent conversation with our AI system.
+
+Client Information:
+- Name: {client_info.get('client_name', 'N/A')}
+- Phone: {client_info.get('phone', 'N/A')}
+- Email: {client_info.get('email', 'N/A')}
+
+Call Summary:
+- Outcome: {call_summary.get('outcome', 'N/A')}
+- Sentiment: {call_summary.get('sentiment', 'N/A')}
+- Key Points: {', '.join(call_summary.get('key_points', [])[:3])}
+
+Customer Concerns:
+{self._format_concerns(call_summary.get('customer_concerns', []))}
+
+Recommended Actions:
+{self._format_actions(call_summary.get('recommended_actions', []))}
+
+Please review the client's information and prepare for the follow-up call.
+
+Best regards,
+The Altruis Team
+            """.strip()
+
+            success = await self._send_email(
+                to_email=agent_email,
+                subject=subject,
+                body=body
+            )
+
+            if success:
+                logger.info(f"✅ Agent assignment email sent to {agent_email}")
+                self.emails_sent += 1
+            else:
+                logger.error(f"❌ Failed to send agent assignment email to {agent_email}")
+                self.emails_failed += 1
+
+            return success
+
+        except Exception as e:
+            logger.error(f"❌ Error sending agent assignment email: {e}")
+            self.emails_failed += 1
+            return False
+
+    async def send_meeting_confirmation_email(self, client_email: str, client_name: str, agent_name: str, meeting_details: Dict[str, Any]) -> bool:
+        """Send meeting confirmation email to client and agent"""
+        try:
+            subject = f"Meeting Confirmation - {meeting_details.get('meeting_time', 'Discovery Call')}"
             
-            <p>A new interested client has been assigned to you from our voice campaign:</p>
-            
-            <div style="background-color: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px;">
-                <h3>Client Information:</h3>
-                <p><strong>Name:</strong> {client_info.get('name', 'N/A')}</p>
-                <p><strong>Phone:</strong> {client_info.get('phone', 'N/A')}</p>
-                <p><strong>Email:</strong> {client_info.get('email', 'N/A')}</p>
-                <p><strong>Assigned:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-            </div>
-            
-            <div style="background-color: #e8f4fd; padding: 15px; margin: 10px 0; border-radius: 5px;">
-                <h3>Call Summary:</h3>
-                <p><strong>Outcome:</strong> {call_summary.get('outcome', 'Interested')}</p>
-                <p><strong>Call Duration:</strong> {call_summary.get('duration', 'N/A')}</p>
-                <p><strong>Key Points:</strong></p>
-                <ul>
-                    {''.join([f'<li>{point}</li>' for point in call_summary.get('key_points', ['Client expressed interest in insurance options'])])}
-                </ul>
-                <p><strong>Next Actions:</strong></p>
-                <ul>
-                    {''.join([f'<li>{action}</li>' for action in call_summary.get('next_actions', ['Schedule discovery call', 'Discuss insurance options'])])}
-                </ul>
-            </div>
-            
-            <div style="background-color: #fff3cd; padding: 15px; margin: 10px 0; border-radius: 5px;">
-                <h3>Meeting Details:</h3>
-                <p><strong>Scheduled Time:</strong> {meeting_time}</p>
-                <p><strong>Calendar Event:</strong> A calendar invite has been sent to your email</p>
-            </div>
-            
-            <p>Please review the client information and prepare for your discovery call. The client has already expressed interest, so focus on understanding their specific needs and presenting appropriate options.</p>
-            
-            <p>Best regards,<br>
-            Voice Agent Campaign System</p>
-        </body>
-        </html>
-        """
-    
-    def _create_assignment_email_text(self, agent_name: str, client_info: Dict, call_summary: Dict) -> str:
-        """Create text content for agent assignment email"""
-        
-        return f"""
-        New Lead Assignment
+            body = f"""
+Dear {client_name},
 
-        Hello {agent_name},
+Your discovery call has been confirmed!
 
-        A new interested client has been assigned to you from our voice campaign:
+Meeting Details:
+- Date: {meeting_details.get('meeting_time', 'TBD')}
+- Duration: 30 minutes
+- Agent: {agent_name}
+- Format: Video call
 
-        CLIENT INFORMATION:
-        - Name: {client_info.get('name', 'N/A')}
-        - Phone: {client_info.get('phone', 'N/A')}
-        - Email: {client_info.get('email', 'N/A')}
-        - Assigned: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+Calendar Link: {meeting_details.get('calendar_link', 'Will be sent separately')}
 
-        CALL SUMMARY:
-        - Outcome: {call_summary.get('outcome', 'Interested')}
-        - Duration: {call_summary.get('duration', 'N/A')}
-        - Key Points: {', '.join(call_summary.get('key_points', ['Client expressed interest']))}
-        - Next Actions: {', '.join(call_summary.get('next_actions', ['Schedule discovery call']))}
+What to expect:
+- Detailed discussion of your needs and requirements
+- Custom solution recommendations
+- Q&A session
+- Next steps planning
 
-        MEETING DETAILS:
-        - Scheduled Time: {call_summary.get('meeting_time', 'Not scheduled')}
-        - Calendar Event: A calendar invite has been sent to your email
+Please let us know if you need to reschedule or have any questions.
 
-        Please review the client information and prepare for your discovery call.
+Best regards,
+{agent_name}
+The Altruis Team
+            """.strip()
 
-        Best regards,
-        Voice Agent Campaign System
-        """
-    
-    def _create_confirmation_email_html(self, client_name: str, agent_name: str, meeting_details: Dict) -> str:
-        """Create HTML content for meeting confirmation email"""
-        
-        meeting_time = meeting_details.get('meeting_time', 'TBD')
-        meet_link = meeting_details.get('meet_link', '')
-        
-        return f"""
-        <html>
-        <body>
-            <h2>Discovery Call Confirmed</h2>
-            
-            <p>Hello {client_name},</p>
-            
-            <p>Thank you for your interest in our insurance services! Your discovery call has been scheduled with one of our specialists.</p>
-            
-            <div style="background-color: #e8f4fd; padding: 15px; margin: 10px 0; border-radius: 5px;">
-                <h3>Meeting Details:</h3>
-                <p><strong>Date & Time:</strong> {meeting_time}</p>
-                <p><strong>With:</strong> {agent_name}</p>
-                <p><strong>Duration:</strong> 15-30 minutes</p>
-                {f'<p><strong>Join Link:</strong> <a href="{meet_link}">Click here to join</a></p>' if meet_link else ''}
-            </div>
-            
-            <div style="background-color: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px;">
-                <h3>What to Expect:</h3>
-                <ul>
-                    <li>Review of your current insurance needs</li>
-                    <li>Discussion of available options</li>
-                    <li>Personalized recommendations</li>
-                    <li>Q&A session for any concerns</li>
-                </ul>
-            </div>
-            
-            <p>If you need to reschedule or have any questions, please call us at <strong>{getattr(settings, 'twilio_phone_number', '(555) 123-4567')}</strong></p>
-            
-            <p>We look forward to helping you find the perfect insurance solution!</p>
-            
-            <p>Best regards,<br>
-            {agent_name}<br>
-            Altrius Advisor Group</p>
-        </body>
-        </html>
-        """
-    
-    def _create_confirmation_email_text(self, client_name: str, agent_name: str, meeting_details: Dict) -> str:
-        """Create text content for meeting confirmation email"""
-        
-        return f"""
-        Discovery Call Confirmed
+            success = await self._send_email(
+                to_email=client_email,
+                subject=subject,
+                body=body
+            )
 
-        Hello {client_name},
+            if success:
+                logger.info(f"✅ Meeting confirmation email sent to {client_email}")
+                self.emails_sent += 1
+            else:
+                logger.error(f"❌ Failed to send meeting confirmation email to {client_email}")
+                self.emails_failed += 1
 
-        Thank you for your interest in our insurance services! Your discovery call has been scheduled with one of our specialists.
+            return success
 
-        MEETING DETAILS:
-        - Date & Time: {meeting_details.get('meeting_time', 'TBD')}
-        - With: {agent_name}
-        - Duration: 15-30 minutes
-        {f"- Join Link: {meeting_details.get('meet_link', '')}" if meeting_details.get('meet_link') else ''}
+        except Exception as e:
+            logger.error(f"❌ Error sending meeting confirmation email: {e}")
+            self.emails_failed += 1
+            return False
 
-        WHAT TO EXPECT:
-        - Review of your current insurance needs
-        - Discussion of available options
-        - Personalized recommendations
-        - Q&A session for any concerns
-
-        If you need to reschedule or have any questions, please call us at {getattr(settings, 'twilio_phone_number', '(555) 123-4567')}.
-
-        We look forward to helping you find the perfect insurance solution!
-
-        Best regards,
-        {agent_name}
-        Altrius Advisor Group
-        """
-    
-    async def _send_email(self, to_email: str, subject: str, html_content: str, text_content: str) -> bool:
-        """Send email via SES or mock"""
-        
-        if not self.ses_client:
-            # Mock email sending for development
-            logger.info(f"📧 Mock email sent to {to_email}")
-            logger.info(f"   Subject: {subject}")
-            self.emails_sent += 1
+    async def _send_email(self, to_email: str, subject: str, body: str) -> bool:
+        """Send email via SES or log in mock mode"""
+        if not self.is_configured():
+            # Mock mode - just log the email
+            logger.info(f"📧 MOCK EMAIL - To: {to_email}")
+            logger.info(f"📧 MOCK EMAIL - Subject: {subject}")
+            logger.info(f"📧 MOCK EMAIL - Body: {body[:200]}...")
             return True
-        
+
         try:
             response = self.ses_client.send_email(
                 Source=self.from_email,
                 Destination={'ToAddresses': [to_email]},
                 Message={
                     'Subject': {'Data': subject, 'Charset': 'UTF-8'},
-                    'Body': {
-                        'Html': {'Data': html_content, 'Charset': 'UTF-8'},
-                        'Text': {'Data': text_content, 'Charset': 'UTF-8'}
-                    }
+                    'Body': {'Text': {'Data': body, 'Charset': 'UTF-8'}}
                 }
             )
-            
-            self.emails_sent += 1
-            logger.info(f"✅ Email sent to {to_email}: {response['MessageId']}")
+            logger.info(f"✅ Email sent successfully: {response['MessageId']}")
             return True
-            
+
         except ClientError as e:
-            logger.error(f"❌ SES error sending email to {to_email}: {e}")
-            self.emails_failed += 1
+            logger.error(f"❌ SES error: {e.response['Error']['Message']}")
             return False
         except Exception as e:
-            logger.error(f"❌ Error sending email to {to_email}: {e}")
-            self.emails_failed += 1
+            logger.error(f"❌ Email sending error: {e}")
             return False
-    
-    def get_statistics(self) -> Dict[str, Any]:
+
+    def _format_key_points(self, points: List[str]) -> str:
+        """Format key points for email"""
+        if not points:
+            return "- No specific points discussed"
+        return "\n".join([f"- {point}" for point in points[:5]])  # Limit to 5 points
+
+    def _format_concerns(self, concerns: List[str]) -> str:
+        """Format customer concerns for email"""
+        if not concerns:
+            return "- No specific concerns raised"
+        return "\n".join([f"- {concern}" for concern in concerns[:3]])  # Limit to 3 concerns
+
+    def _format_actions(self, actions: List[str]) -> str:
+        """Format recommended actions for email"""
+        if not actions:
+            return "- No specific actions recommended"
+        return "\n".join([f"- {action}" for action in actions[:3]])  # Limit to 3 actions
+
+    def get_stats(self) -> Dict[str, Any]:
         """Get email service statistics"""
-        total_attempts = self.emails_sent + self.emails_failed
-        success_rate = (self.emails_sent / total_attempts * 100) if total_attempts > 0 else 0
-        
         return {
             "emails_sent": self.emails_sent,
             "emails_failed": self.emails_failed,
-            "total_attempts": total_attempts,
-            "success_rate": success_rate,
-            "ses_configured": self.ses_client is not None
+            "success_rate": self.emails_sent / (self.emails_sent + self.emails_failed) * 100 if (self.emails_sent + self.emails_failed) > 0 else 0,
+            "configured": self.is_configured()
         }
-    
-    async def close(self):
-        """Close email service"""
-        if self.ses_client:
-            # SES client doesn't need explicit closing
-            logger.info("✅ Email service closed")
-        else:
-            logger.info("✅ Mock email service closed")

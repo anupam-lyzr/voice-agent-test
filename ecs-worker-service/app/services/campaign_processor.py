@@ -50,8 +50,19 @@ class CampaignProcessor:
             logger.error("❌ Twilio not configured - cannot process campaign")
             return {"error": "twilio_not_configured"}
         
-        if not client_repo:
-            logger.error("❌ Database repository not available")
+        # Check if database repositories are available
+        try:
+            from shared.utils.database import client_repo, session_repo, init_database
+            if client_repo is None:
+                logger.info("🔄 Initializing database repositories...")
+                await init_database()
+                # Re-import after initialization
+                from shared.utils.database import client_repo, session_repo
+                if client_repo is None:
+                    logger.error("❌ Database repository not available after initialization")
+                    return {"error": "database_not_available"}
+        except ImportError:
+            logger.error("❌ Database utilities not available")
             return {"error": "database_not_available"}
         
         try:

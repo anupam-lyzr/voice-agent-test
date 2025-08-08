@@ -77,8 +77,11 @@ interface TestClient {
   email?: string;
   status: string;
   total_attempts: number;
+  attempts_left: number;
   created_at: string;
   last_call_outcome?: string;
+  assigned_agent?: string;
+  next_call_scheduled?: string;
 }
 
 interface TestAgent {
@@ -210,13 +213,13 @@ export default function Testing() {
 
   const [isCreatingClient, setIsCreatingClient] = useState(false);
   const [isCreatingAgent, setIsCreatingAgent] = useState(false);
-  const [isCallInProgress, setIsCallInProgress] = useState(false);
+  const [isBatchCallInProgress, setIsBatchCallInProgress] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [testClients, setTestClients] = useState<TestClient[]>([]);
   const [testAgents, setTestAgents] = useState<TestAgent[]>([]);
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
-  const [selectedClient, setSelectedClient] = useState("");
+  const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState("");
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [testStats, setTestStats] = useState<TestStats | null>(null);
@@ -240,7 +243,17 @@ export default function Testing() {
           `${API_BASE}/api/dashboard/test-clients`
         );
         const clientsData = await clientsRes.json();
-        setTestClients(clientsData.clients || []);
+        // Calculate attempts left for each client
+        const clientsWithAttempts = (clientsData.clients || []).map(
+          (client: Record<string, unknown>) => ({
+            ...client,
+            attempts_left: Math.max(
+              0,
+              6 - ((client.total_attempts as number) || 0)
+            ), // Max 6 attempts
+          })
+        );
+        setTestClients(clientsWithAttempts);
       }
 
       if (!type || type === "agents") {
@@ -251,13 +264,11 @@ export default function Testing() {
 
       if (!type || type === "call-logs") {
         const logsRes = await fetch(
-          `${API_BASE}/api/dashboard/call-logs?limit=50`
+          `${API_BASE}/api/dashboard/call-logs?limit=100`
         );
         const logsData = await logsRes.json();
-        const testCallLogs = (logsData.logs || []).filter(
-          (log: Record<string, unknown>) => log.is_test_call
-        );
-        setCallLogs(testCallLogs);
+        // Show all call logs, not just test calls, but mark test calls
+        setCallLogs(logsData.logs || []);
       }
 
       if (!type || type === "active-calls") {
@@ -396,53 +407,6 @@ export default function Testing() {
     setIsCreatingAgent(false);
   };
 
-  const handleStartTestCall = async () => {
-    if (!selectedClient || !selectedAgent) return;
-    setIsCallInProgress(true);
-
-    try {
-      const response = await fetch(`${API_BASE}/api/dashboard/test-call`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: selectedClient,
-          agent_id: selectedAgent,
-          call_type: "test",
-        }),
-      });
-      const result = await response.json();
-
-      if (result.success) {
-        toast.success("Real test call initiated!", {
-          description: `Calling ${result.client_phone} - Call SID: ${result.call_sid}`,
-        });
-
-        const newActiveCall: ActiveCall = {
-          call_id: result.call_id,
-          call_sid: result.call_sid,
-          client_name: result.client_name,
-          client_phone: result.client_phone,
-          agent_name: result.agent_name,
-          status: result.status || "initiated",
-          started_at: new Date().toISOString(),
-          duration_seconds: 0,
-          current_stage: "call_initiated",
-          conversation_turns: 0,
-          last_activity: new Date().toISOString(),
-        };
-        setActiveCalls((prev) => [...prev, newActiveCall]);
-        pollCallStatus(result.call_sid);
-      } else {
-        toast.error("Test call failed", {
-          description: result.detail || "Failed to start test call.",
-        });
-      }
-    } catch {
-      toast.error("An unexpected error occurred.");
-    }
-    setIsCallInProgress(false);
-  };
-
   const pollCallStatus = async (callSid: string) => {
     const pollInterval = setInterval(async () => {
       try {
@@ -553,6 +517,97 @@ export default function Testing() {
     return (
       outcomeMap[outcome as keyof typeof outcomeMap] || outcomeMap.completed
     );
+  };
+
+  const handleStartBatchTestCalls = async () => {
+    if (selectedClients.length === 0 || !selectedAgent) {
+      toast.error("Please select at least one client and an agent");
+      return;
+    }
+
+    if (selectedClients.length > 10) {
+      toast.error("Maximum 10 clients allowed for batch testing");
+      return;
+    }
+
+    setIsBatchCallInProgress(true);
+
+    try {
+      const results = [];
+      for (const clientId of selectedClients) {
+        try {
+          const response = await fetch(`${API_BASE}/api/dashboard/test-call`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              client_id: clientId,
+              agent_id: selectedAgent,
+              call_type: "test",
+            }),
+          });
+          const result = await response.json();
+
+          if (result.success) {
+            results.push({
+              client_id: clientId,
+              success: true,
+              call_sid: result.call_sid,
+              client_name: result.client_name,
+            });
+
+            const newActiveCall: ActiveCall = {
+              call_id: result.call_id,
+              call_sid: result.call_sid,
+              client_name: result.client_name,
+              client_phone: result.client_phone,
+              agent_name: result.agent_name,
+              status: result.status || "initiated",
+              started_at: new Date().toISOString(),
+              duration_seconds: 0,
+              current_stage: "call_initiated",
+              conversation_turns: 0,
+              last_activity: new Date().toISOString(),
+            };
+            setActiveCalls((prev) => [...prev, newActiveCall]);
+            pollCallStatus(result.call_sid);
+          } else {
+            results.push({
+              client_id: clientId,
+              success: false,
+              error: result.detail || "Failed to start call",
+            });
+          }
+        } catch (error) {
+          results.push({
+            client_id: clientId,
+            success: false,
+            error: "Network error",
+          });
+        }
+
+        // Add delay between calls to avoid overwhelming the system
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      const failureCount = results.length - successCount;
+
+      if (successCount > 0) {
+        toast.success(
+          `Batch test calls initiated: ${successCount} successful, ${failureCount} failed`
+        );
+      } else {
+        toast.error("All batch test calls failed");
+      }
+
+      // Clear selections after batch call
+      setSelectedClients([]);
+      setSelectedAgent("");
+    } catch (error) {
+      toast.error("Batch test calls failed");
+    } finally {
+      setIsBatchCallInProgress(false);
+    }
   };
 
   return (
@@ -1130,41 +1185,61 @@ export default function Testing() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Target className="h-5 w-5" />
-                Real Test Call Execution
+                Multi-Client Test Call Execution
               </CardTitle>
               <CardDescription>
-                Execute real voice calls using Twilio with full production
-                pipeline
+                Execute real voice calls for multiple clients (max 10) using
+                Twilio with full production pipeline
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <FormRow>
                 <div className="space-y-1.5">
-                  <Label>Test Client</Label>
-                  <div className="flex gap-2">
-                    <Select
-                      value={selectedClient}
-                      onValueChange={setSelectedClient}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select test client" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {testClients.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            {c.name} ({c.phone})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => loadData("clients")}
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                    </Button>
+                  <Label>Test Clients (Select up to 10)</Label>
+                  <div className="max-h-60 overflow-y-auto border rounded-md p-2">
+                    {testClients.map((client) => (
+                      <div
+                        key={client.id}
+                        className="flex items-center space-x-2 py-1"
+                      >
+                        <input
+                          type="checkbox"
+                          id={`client-${client.id}`}
+                          checked={selectedClients.includes(client.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              if (selectedClients.length < 10) {
+                                setSelectedClients([
+                                  ...selectedClients,
+                                  client.id,
+                                ]);
+                              } else {
+                                toast.error("Maximum 10 clients allowed");
+                              }
+                            } else {
+                              setSelectedClients(
+                                selectedClients.filter((id) => id !== client.id)
+                              );
+                            }
+                          }}
+                          disabled={
+                            selectedClients.length >= 10 &&
+                            !selectedClients.includes(client.id)
+                          }
+                        />
+                        <label
+                          htmlFor={`client-${client.id}`}
+                          className="text-sm"
+                        >
+                          {client.name} ({client.phone}) -{" "}
+                          {client.attempts_left} attempts left
+                        </label>
+                      </div>
+                    ))}
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Selected: {selectedClients.length}/10 clients
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label>Test Agent</Label>
@@ -1200,48 +1275,52 @@ export default function Testing() {
                   <PhoneCall className="h-5 w-5 text-blue-600 mt-0.5" />
                   <div>
                     <h4 className="font-medium text-blue-900 dark:text-blue-200">
-                      Real Call Execution
+                      Batch Call Execution
                     </h4>
                     <p className="text-sm text-blue-700 dark:text-blue-300">
-                      This will make an actual phone call to the selected client
-                      using Twilio. The call will go through the complete
-                      production pipeline including Deepgram STT, LYZR
-                      conversation processing, and ElevenLabs TTS.
+                      This will make actual phone calls to all selected clients
+                      using Twilio. Calls will be initiated with a 2-second
+                      delay between each to avoid overwhelming the system. Each
+                      call will go through the complete production pipeline.
                     </p>
                   </div>
                 </div>
               </div>
 
               <Button
-                onClick={handleStartTestCall}
-                disabled={isCallInProgress || !selectedClient || !selectedAgent}
+                onClick={handleStartBatchTestCalls}
+                disabled={
+                  isBatchCallInProgress ||
+                  selectedClients.length === 0 ||
+                  !selectedAgent
+                }
                 className="w-full"
                 size="lg"
               >
-                {isCallInProgress ? (
+                {isBatchCallInProgress ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
                   <Play className="mr-2 h-4 w-4" />
                 )}
-                {isCallInProgress
-                  ? "Initiating Real Call..."
-                  : "Start Real Test Call"}
+                {isBatchCallInProgress
+                  ? `Initiating ${selectedClients.length} Calls...`
+                  : `Start Batch Test Calls (${selectedClients.length} clients)`}
               </Button>
 
-              {isCallInProgress && (
+              {isBatchCallInProgress && (
                 <Card className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20">
                   <CardContent className="pt-6">
                     <div className="space-y-4">
                       <div className="flex items-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                         <span className="text-blue-800 font-medium dark:text-blue-200">
-                          Call in progress...
+                          Batch calls in progress...
                         </span>
                       </div>
                       <Progress value={33} className="w-full" />
                       <p className="text-sm text-blue-600 dark:text-blue-300">
-                        The system is processing your test call. You should
-                        receive a call shortly.
+                        Initiating {selectedClients.length} test calls with
+                        2-second delays between each call.
                       </p>
                     </div>
                   </CardContent>
@@ -1307,11 +1386,11 @@ export default function Testing() {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>
-                    Test Call Logs & History ({callLogs.length})
+                    All Call Logs & History ({callLogs.length})
                   </CardTitle>
                   <CardDescription>
-                    Complete test call records with summaries and performance
-                    metrics
+                    Complete call records with summaries and performance
+                    metrics. Test calls are highlighted.
                   </CardDescription>
                 </div>
                 <Button
@@ -1342,188 +1421,192 @@ export default function Testing() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {callLogs
-                      .filter((log) => log.is_test_call)
-                      .map((log) => (
-                        <TableRow key={log.call_id}>
-                          <TableCell>
-                            <div>
-                              <div className="font-mono text-xs text-muted-foreground">
-                                {log.call_sid?.substring(0, 8)}...
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                Turns: {log.conversation_turns || 0}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div>
-                              <div className="font-medium">
-                                {log.client_name}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                {log.client_phone}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge {...getStatusBadge(log.status)}>
-                              {log.status.replace("_", " ")}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge {...getOutcomeBadge(log.outcome)}>
-                              {log.outcome.replace("_", " ")}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{log.duration}</TableCell>
-                          <TableCell>
-                            <div className="text-sm">
-                              {new Date(log.started_at).toLocaleDateString()}
+                    {callLogs.map((log) => (
+                      <TableRow
+                        key={log.call_id}
+                        className={
+                          log.is_test_call
+                            ? "bg-blue-50 dark:bg-blue-900/20"
+                            : ""
+                        }
+                      >
+                        <TableCell>
+                          <div>
+                            <div className="font-mono text-xs text-muted-foreground">
+                              {log.call_sid?.substring(0, 8)}...
                             </div>
                             <div className="text-xs text-muted-foreground">
-                              {new Date(log.started_at).toLocaleTimeString()}
+                              Turns: {log.conversation_turns || 0}
                             </div>
-                          </TableCell>
-                          <TableCell>
-                            <Dialog>
-                              <DialogTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => viewCallSummary(log)}
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                              </DialogTrigger>
-                              <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-                                <DialogHeader>
-                                  <DialogTitle>
-                                    Call Summary & Analysis
-                                  </DialogTitle>
-                                  <DialogDescription>
-                                    Complete AI-generated analysis for call with{" "}
-                                    {log.client_name}
-                                  </DialogDescription>
-                                </DialogHeader>
-                                {selectedCallSummary && (
-                                  <div className="space-y-6">
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                      <div className="p-3 border rounded-lg">
-                                        <Label className="text-xs">
-                                          Outcome
-                                        </Label>
-                                        <div className="mt-1">
-                                          <Badge
-                                            {...getOutcomeBadge(
-                                              selectedCallSummary.outcome
-                                            )}
-                                          >
-                                            {selectedCallSummary.outcome.replace(
-                                              "_",
-                                              " "
-                                            )}
-                                          </Badge>
-                                        </div>
-                                      </div>
-                                      <div className="p-3 border rounded-lg">
-                                        <Label className="text-xs">
-                                          Sentiment
-                                        </Label>
-                                        <div className="mt-1">
-                                          <Badge variant="outline">
-                                            {selectedCallSummary.sentiment}
-                                          </Badge>
-                                        </div>
-                                      </div>
-                                      <div className="p-3 border rounded-lg">
-                                        <Label className="text-xs">
-                                          Urgency
-                                        </Label>
-                                        <div className="mt-1">
-                                          <Badge variant="secondary">
-                                            {selectedCallSummary.urgency}
-                                          </Badge>
-                                        </div>
-                                      </div>
-                                      <div className="p-3 border rounded-lg">
-                                        <Label className="text-xs">
-                                          Quality Score
-                                        </Label>
-                                        <div className="text-2xl font-bold mt-1">
-                                          {selectedCallSummary.call_score}/10
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                      <div className="space-y-3">
-                                        <div>
-                                          <Label className="font-medium">
-                                            Key Points
-                                          </Label>
-                                          <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                                            {selectedCallSummary.key_points?.map(
-                                              (point, i) => (
-                                                <li key={i}>{point}</li>
-                                              )
-                                            )}
-                                          </ul>
-                                        </div>
-                                        <div>
-                                          <Label className="font-medium">
-                                            Customer Concerns
-                                          </Label>
-                                          <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                                            {selectedCallSummary.customer_concerns?.map(
-                                              (concern, i) => (
-                                                <li key={i}>{concern}</li>
-                                              )
-                                            )}
-                                          </ul>
-                                        </div>
-                                      </div>
-                                      <div className="space-y-3">
-                                        <div>
-                                          <Label className="font-medium">
-                                            Recommended Actions
-                                          </Label>
-                                          <ul className="list-disc list-inside text-sm space-y-1 mt-2">
-                                            {selectedCallSummary.recommended_actions?.map(
-                                              (action, i) => (
-                                                <li key={i}>{action}</li>
-                                              )
-                                            )}
-                                          </ul>
-                                        </div>
-                                        <div>
-                                          <Label className="font-medium">
-                                            Follow-up Timeframe
-                                          </Label>
-                                          <p className="text-sm mt-2">
-                                            {
-                                              selectedCallSummary.follow_up_timeframe
-                                            }
-                                          </p>
-                                        </div>
+                            {log.is_test_call && (
+                              <Badge variant="outline" className="text-xs mt-1">
+                                Test Call
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div>
+                            <div className="font-medium">{log.client_name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {log.client_phone}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge {...getStatusBadge(log.status)}>
+                            {log.status.replace("_", " ")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge {...getOutcomeBadge(log.outcome)}>
+                            {log.outcome.replace("_", " ")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{log.duration}</TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            {new Date(log.started_at).toLocaleDateString()}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {new Date(log.started_at).toLocaleTimeString()}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Dialog>
+                            <DialogTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => viewCallSummary(log)}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+                              <DialogHeader>
+                                <DialogTitle>
+                                  Call Summary & Analysis
+                                </DialogTitle>
+                                <DialogDescription>
+                                  Complete AI-generated analysis for call with{" "}
+                                  {log.client_name}
+                                </DialogDescription>
+                              </DialogHeader>
+                              {selectedCallSummary && (
+                                <div className="space-y-6">
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="p-3 border rounded-lg">
+                                      <Label className="text-xs">Outcome</Label>
+                                      <div className="mt-1">
+                                        <Badge
+                                          {...getOutcomeBadge(
+                                            selectedCallSummary.outcome
+                                          )}
+                                        >
+                                          {selectedCallSummary.outcome.replace(
+                                            "_",
+                                            " "
+                                          )}
+                                        </Badge>
                                       </div>
                                     </div>
-                                    <div>
-                                      <Label className="font-medium">
-                                        AI Agent Notes
+                                    <div className="p-3 border rounded-lg">
+                                      <Label className="text-xs">
+                                        Sentiment
                                       </Label>
-                                      <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                                        <p className="text-sm">
-                                          {selectedCallSummary.agent_notes}
+                                      <div className="mt-1">
+                                        <Badge variant="outline">
+                                          {selectedCallSummary.sentiment}
+                                        </Badge>
+                                      </div>
+                                    </div>
+                                    <div className="p-3 border rounded-lg">
+                                      <Label className="text-xs">Urgency</Label>
+                                      <div className="mt-1">
+                                        <Badge variant="secondary">
+                                          {selectedCallSummary.urgency}
+                                        </Badge>
+                                      </div>
+                                    </div>
+                                    <div className="p-3 border rounded-lg">
+                                      <Label className="text-xs">
+                                        Quality Score
+                                      </Label>
+                                      <div className="text-2xl font-bold mt-1">
+                                        {selectedCallSummary.call_score}/10
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-3">
+                                      <div>
+                                        <Label className="font-medium">
+                                          Key Points
+                                        </Label>
+                                        <ul className="list-disc list-inside text-sm space-y-1 mt-2">
+                                          {selectedCallSummary.key_points?.map(
+                                            (point, i) => (
+                                              <li key={i}>{point}</li>
+                                            )
+                                          )}
+                                        </ul>
+                                      </div>
+                                      <div>
+                                        <Label className="font-medium">
+                                          Customer Concerns
+                                        </Label>
+                                        <ul className="list-disc list-inside text-sm space-y-1 mt-2">
+                                          {selectedCallSummary.customer_concerns?.map(
+                                            (concern, i) => (
+                                              <li key={i}>{concern}</li>
+                                            )
+                                          )}
+                                        </ul>
+                                      </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                      <div>
+                                        <Label className="font-medium">
+                                          Recommended Actions
+                                        </Label>
+                                        <ul className="list-disc list-inside text-sm space-y-1 mt-2">
+                                          {selectedCallSummary.recommended_actions?.map(
+                                            (action, i) => (
+                                              <li key={i}>{action}</li>
+                                            )
+                                          )}
+                                        </ul>
+                                      </div>
+                                      <div>
+                                        <Label className="font-medium">
+                                          Follow-up Timeframe
+                                        </Label>
+                                        <p className="text-sm mt-2">
+                                          {
+                                            selectedCallSummary.follow_up_timeframe
+                                          }
                                         </p>
                                       </div>
                                     </div>
                                   </div>
-                                )}
-                              </DialogContent>
-                            </Dialog>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                                  <div>
+                                    <Label className="font-medium">
+                                      AI Agent Notes
+                                    </Label>
+                                    <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                                      <p className="text-sm">
+                                        {selectedCallSummary.agent_notes}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </DialogContent>
+                          </Dialog>
+                        </TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               </div>

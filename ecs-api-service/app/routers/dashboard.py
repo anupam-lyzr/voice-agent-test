@@ -258,14 +258,29 @@ async def get_call_logs(
             # Get client information
             client_name = "Unknown"
             client_phone = session.phone_number
+            total_attempts = 0
+            attempts_left = 6
+            next_call_scheduled = None
+            agent_assigned = None
             
             if session.client_data:
                 client_name = session.client_data.get("client_name", "Unknown")
-            elif session.client_id and session.client_id != "unknown" and client_repo:
+                agent_assigned = session.client_data.get("agent_name")
+            
+            # Get detailed client info from database
+            if session.client_id and session.client_id != "unknown" and client_repo:
                 try:
                     client = await client_repo.get_client_by_id(session.client_id)
                     if client:
                         client_name = f"{client.client.first_name} {client.client.last_name}"
+                        total_attempts = client.total_attempts
+                        attempts_left = max(0, 6 - total_attempts)
+                        
+                        # Check for agent assignment and next call
+                        if client.agent_assignment:
+                            agent_assigned = client.agent_assignment.agent_name
+                            if client.agent_assignment.meeting_scheduled:
+                                next_call_scheduled = client.agent_assignment.meeting_scheduled.isoformat()
                 except Exception:
                     pass
             
@@ -287,48 +302,25 @@ async def get_call_logs(
                 "completed_at": session.completed_at.isoformat() if session.completed_at else None,
                 "conversation_turns": len(session.conversation_turns) if session.conversation_turns else 0,
                 "conversation_stage": session.conversation_stage.value if session.conversation_stage else "unknown",
-                "is_test_call": getattr(session, 'is_test_call', False)
+                "is_test_call": getattr(session, 'is_test_call', False),
+                "total_attempts": total_attempts,
+                "attempts_left": attempts_left,
+                "next_call_scheduled": next_call_scheduled,
+                "agent_assigned": agent_assigned
             }
-            
-            # Add transcript if requested (for individual call view)
-            if session.conversation_turns:
-                log_entry["has_transcript"] = True
-                log_entry["transcript_preview"] = session.conversation_turns[0].customer_speech[:100] + "..." if session.conversation_turns[0].customer_speech else ""
-            else:
-                log_entry["has_transcript"] = False
-                log_entry["transcript_preview"] = ""
-            
-            # Add summary if available
-            if hasattr(session, 'call_summary') and session.call_summary:
-                log_entry["has_summary"] = True
-                log_entry["summary_preview"] = {
-                    "sentiment": session.call_summary.get("sentiment", "unknown"),
-                    "key_points": session.call_summary.get("key_points", [])[:2],  # First 2 points
-                    "urgency": session.call_summary.get("urgency", "unknown")
-                }
-            else:
-                log_entry["has_summary"] = False
-                log_entry["summary_preview"] = None
             
             call_logs.append(log_entry)
         
         return {
             "logs": call_logs,
             "total": total_count,
-            "page": offset // limit + 1,
-            "pages": (total_count + limit - 1) // limit,
-            "limit": limit
+            "limit": limit,
+            "offset": offset
         }
         
     except Exception as e:
         logger.error(f"❌ Call logs error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return {
-            "logs": [],
-            "total": 0,
-            "error": str(e)
-        }
+        return {"logs": [], "total": 0, "error": str(e)}
 
 @router.get("/call-details/{call_id}")
 async def get_call_details(call_id: str):

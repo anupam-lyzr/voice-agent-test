@@ -9,8 +9,8 @@ import signal
 import sys
 import os
 import time
-from datetime import datetime
-from typing import Dict, Any, List
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +38,8 @@ try:
     from shared.config.settings import settings
     from shared.utils.database import init_database, close_database
     from shared.utils.redis_client import init_redis, close_redis
+    from shared.utils.database import db_client
+    from shared.models.call_session import CallSession
     shared_available = True
     logger.info("✅ Shared utilities imported successfully")
 except ImportError as e:
@@ -97,8 +99,17 @@ class WorkerService:
             try:
                 await init_database()
                 logger.info("✅ Database initialized")
+                
+                # Test database connection
+                from shared.utils.database import db_client
+                if db_client and db_client.is_connected():
+                    logger.info("✅ Database connection verified")
+                else:
+                    logger.error("❌ Database connection failed")
+                    
             except Exception as e:
-                logger.warning(f"⚠️ Database initialization failed: {e}")
+                logger.error(f"❌ Database initialization failed: {e}")
+                logger.error("This will prevent the worker from processing data")
             
             try:
                 await init_redis()
@@ -267,47 +278,127 @@ class WorkerService:
         
         except Exception as e:
             logger.error(f"❌ Agent assignment processing error: {e}")
-    
+
     async def _process_email_notifications(self):
-        """Send email notifications"""
+        """Send email notifications based on conversation stages"""
         try:
-            # Mock getting pending email notifications
-            pending_emails = []  # Would get from database
-            
-            if pending_emails:
-                logger.info(f"📧 Processing {len(pending_emails)} email notifications")
-                
-                for email_task in pending_emails:
+            # Get completed calls that need email notifications
+            if db_client is None or db_client.database is None:
+                return
+
+            # Find calls completed in the last hour that need email processing
+            one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+
+            cursor = db_client.database.call_sessions.find({
+                "completed_at": {"$gte": one_hour_ago},
+                "email_sent": {"$ne": True},  # Only process calls that haven't sent emails
+                "final_outcome": {"$exists": True, "$ne": None}
+            })
+
+            processed_count = 0
+            async for doc in cursor:
+                try:
+                    # Handle invalid enum values gracefully
                     try:
-                        email_type = email_task.get("type")
-                        
-                        if email_type == "agent_assignment":
-                            success = await self.email_service.send_agent_assignment_email(
-                                agent_email=email_task["agent_email"],
-                                agent_name=email_task["agent_name"],
-                                client_info=email_task["client_info"],
-                                call_summary=email_task["call_summary"]
-                            )
-                        elif email_type == "meeting_confirmation":
-                            success = await self.email_service.send_meeting_confirmation_email(
-                                client_email=email_task["client_email"],
-                                client_name=email_task["client_name"],
-                                agent_name=email_task["agent_name"],
-                                meeting_details=email_task["meeting_details"]
-                            )
-                        else:
-                            success = False
-                        
-                        if success:
-                            logger.info(f"✅ Email sent: {email_type}")
-                        else:
-                            logger.warning(f"⚠️ Email failed: {email_type}")
-                    
-                    except Exception as e:
-                        logger.error(f"❌ Email sending error: {e}")
-        
+                        session = CallSession(**doc)
+                    except Exception as validation_error:
+                        logger.warning(f"⚠️ Invalid session data for {doc.get('session_id', 'unknown')}: {validation_error}")
+                        logger.warning("Skipping this session due to data validation errors")
+                        continue
+
+                    # Determine email stage based on outcome
+                    email_stage = self._determine_email_stage(session.final_outcome)
+
+                    if not email_stage:
+                        continue
+
+                    # Get client information
+                    client_email = None
+                    client_name = session.client_data.get("client_name", "Client") if session.client_data else "Client"
+
+                    # Try to get client email from database
+                    if session.client_id and session.client_id != "unknown":
+                        try:
+                            from shared.utils.database import client_repo
+                            if client_repo:
+                                client = await client_repo.get_client_by_id(session.client_id)
+                                if client and hasattr(client.client, 'email') and client.client.email:
+                                    client_email = client.client.email
+                                    client_name = f"{client.client.first_name} {client.client.last_name}"
+                        except Exception as e:
+                            logger.warning(f"Could not get client email: {e}")
+
+                    # If no email found, skip this notification
+                    if not client_email:
+                        logger.info(f"No email found for client {client_name}, skipping email notification")
+                        continue
+
+                    # Get call summary
+                    call_summary = self._build_call_summary(session)
+
+                    # Send email based on stage
+                    success = await self.email_service.send_conversation_stage_email(
+                        client_email=client_email,
+                        client_name=client_name,
+                        stage=email_stage,
+                        call_summary=call_summary
+                    )
+
+                    if success:
+                        # Mark email as sent
+                        await db_client.database.call_sessions.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": {"email_sent": True, "email_sent_at": datetime.utcnow()}}
+                        )
+                        processed_count += 1
+                        logger.info(f"✅ Email sent for call {session.session_id} to {client_email}")
+
+                except Exception as e:
+                    logger.error(f"❌ Error processing email for call {doc.get('session_id', 'unknown')}: {e}")
+                    continue
+
+            if processed_count > 0:
+                logger.info(f"📧 Processed {processed_count} email notifications")
+
         except Exception as e:
-            logger.error(f"❌ Email processing error: {e}")
+            logger.error(f"❌ Email notification processing error: {e}")
+
+    def _determine_email_stage(self, outcome: str) -> Optional[str]:
+        """Determine email stage based on call outcome"""
+        stage_mapping = {
+            "interested": "interested",
+            "not_interested": "not_interested",
+            "scheduled_morning": "meeting_scheduled",
+            "scheduled_afternoon": "meeting_scheduled",
+            "follow_up": "follow_up",
+            "no_answer": "follow_up",
+            "busy": "follow_up"
+        }
+        return stage_mapping.get(outcome)
+
+    def _build_call_summary(self, session: CallSession) -> Dict[str, Any]:
+        """Build call summary for email"""
+        summary = {
+            "outcome": session.final_outcome or "unknown",
+            "duration": session.session_metrics.total_call_duration_seconds if session.session_metrics else 0,
+            "conversation_turns": len(session.conversation_turns) if session.conversation_turns else 0,
+            "key_points": [],
+            "customer_concerns": [],
+            "recommended_actions": []
+        }
+        
+        # Extract key points from conversation
+        if session.conversation_turns:
+            # Simple extraction - in production you'd use AI to analyze
+            for turn in session.conversation_turns[-3:]:  # Last 3 turns
+                if turn.customer_speech:
+                    summary["key_points"].append(turn.customer_speech[:100] + "...")
+        
+        # Add meeting time if scheduled
+        if session.final_outcome in ["scheduled_morning", "scheduled_afternoon"]:
+            summary["meeting_time"] = "Tomorrow at 10 AM" if session.final_outcome == "scheduled_morning" else "Tomorrow at 2 PM"
+        
+        return summary
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""

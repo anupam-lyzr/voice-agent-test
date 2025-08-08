@@ -3,8 +3,8 @@ Call Session Models
 Models for managing real-time call sessions and conversation state
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, validator
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
 from enum import Enum
 
@@ -62,6 +62,38 @@ class ConversationTurn(BaseModel):
     customer_intent: Optional[str] = Field(None, description="Detected customer intent")
     confidence_score: Optional[float] = Field(None, description="Intent confidence")
 
+    @validator('response_type', pre=True)
+    def validate_response_type(cls, v):
+        """Convert invalid response_type values to valid ones"""
+        if isinstance(v, str):
+            v = v.lower()
+            if v == 'static':
+                return ResponseType.STATIC_AUDIO
+            elif v in ['dynamic', 'tts']:
+                return ResponseType.DYNAMIC_TTS
+            elif v in ['hybrid', 'mixed']:
+                return ResponseType.HYBRID
+        return v
+
+    @validator('conversation_stage', pre=True)
+    def validate_conversation_stage(cls, v):
+        """Convert invalid conversation_stage values to valid ones"""
+        if isinstance(v, str):
+            v = v.lower()
+            if v == 'goodbye':
+                return ConversationStage.CLOSING
+            elif v in ['greeting', 'hello']:
+                return ConversationStage.GREETING
+            elif v in ['interest', 'interested']:
+                return ConversationStage.INTEREST_CHECK
+            elif v in ['schedule', 'scheduling']:
+                return ConversationStage.SCHEDULING
+            elif v in ['dnc', 'do_not_call']:
+                return ConversationStage.DNC_QUESTION
+            elif v in ['complete', 'completed', 'done']:
+                return ConversationStage.COMPLETED
+        return v
+
 class SessionMetrics(BaseModel):
     """Performance metrics for the call session"""
     # Timing metrics
@@ -98,6 +130,25 @@ class CallSession(BaseModel):
     
     # Conversation state
     conversation_stage: ConversationStage = Field(default=ConversationStage.GREETING, description="Current conversation stage")
+
+    @validator('conversation_stage', pre=True)
+    def validate_session_conversation_stage(cls, v):
+        """Convert invalid conversation_stage values to valid ones"""
+        if isinstance(v, str):
+            v = v.lower()
+            if v == 'goodbye':
+                return ConversationStage.CLOSING
+            elif v in ['greeting', 'hello']:
+                return ConversationStage.GREETING
+            elif v in ['interest', 'interested']:
+                return ConversationStage.INTEREST_CHECK
+            elif v in ['schedule', 'scheduling']:
+                return ConversationStage.SCHEDULING
+            elif v in ['dnc', 'do_not_call']:
+                return ConversationStage.DNC_QUESTION
+            elif v in ['complete', 'completed', 'done']:
+                return ConversationStage.COMPLETED
+        return v
     conversation_turns: List[ConversationTurn] = Field(default_factory=list, description="All conversation turns")
     current_turn_number: int = Field(default=0, description="Current turn number")
     

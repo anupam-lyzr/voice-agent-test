@@ -31,8 +31,11 @@ class SQSConsumer:
         self.sqs_client = None
         self.queue_url = None
         
-        # Initialize SQS client if AWS is available and configured
-        if AWS_AVAILABLE and settings.aws_region:
+        # Check if we're in development mode or if AWS credentials are not available
+        is_development = getattr(settings, 'environment', 'development').lower() == 'development'
+        
+        # Initialize SQS client if AWS is available, configured, and we're in production
+        if AWS_AVAILABLE and settings.aws_region and not is_development:
             try:
                 self.sqs_client = boto3.client('sqs', region_name=settings.aws_region)
                 self.queue_url = f"https://sqs.{settings.aws_region}.amazonaws.com/{settings.aws_account_id}/voice-agent-campaign-queue"
@@ -41,7 +44,10 @@ class SQSConsumer:
                 logger.warning(f"⚠️ SQS not available: {e}")
                 self.sqs_client = None
         else:
-            logger.info("🔧 Running in local mode - SQS operations will be mocked")
+            if is_development:
+                logger.info("🔧 Running in development mode - SQS operations will be mocked")
+            else:
+                logger.info("🔧 AWS not configured - SQS operations will be mocked")
     
     async def process_queue(self, max_messages: int = 10) -> List[Dict[str, Any]]:
         """Process messages from SQS queue"""

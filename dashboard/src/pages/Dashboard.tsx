@@ -46,6 +46,11 @@ interface CallLog {
   outcome: string;
   duration: string;
   started_at: string;
+  is_test_call?: boolean;
+  total_attempts?: number;
+  attempts_left?: number;
+  next_call_scheduled?: string;
+  agent_assigned?: string;
 }
 
 interface SystemHealth {
@@ -320,22 +325,63 @@ export default function Dashboard() {
                   <TableHead>Client</TableHead>
                   <TableHead>Outcome</TableHead>
                   <TableHead>Duration</TableHead>
+                  <TableHead>Attempts</TableHead>
+                  <TableHead>Next Call</TableHead>
                   <TableHead>Time</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {callLogs.map((log) => (
-                  <TableRow key={log.call_id}>
+                  <TableRow
+                    key={log.call_id}
+                    className={
+                      log.is_test_call ? "bg-blue-50 dark:bg-blue-900/20" : ""
+                    }
+                  >
                     <TableCell className="font-medium">
                       {log.call_id.substring(0, 8)}...
+                      {log.is_test_call && (
+                        <Badge variant="outline" className="ml-2 text-xs">
+                          Test
+                        </Badge>
+                      )}
                     </TableCell>
-                    <TableCell>{log.client_name || log.client_phone}</TableCell>
+                    <TableCell>
+                      <div>
+                        <div>{log.client_name || log.client_phone}</div>
+                        {log.agent_assigned && (
+                          <div className="text-xs text-muted-foreground">
+                            Agent: {log.agent_assigned}
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <Badge {...getOutcomeBadge(log.outcome)}>
                         {log.outcome.replace("_", " ")}
                       </Badge>
                     </TableCell>
                     <TableCell>{log.duration}</TableCell>
+                    <TableCell>
+                      <div className="text-sm">
+                        {log.total_attempts || 0}/{6 - (log.attempts_left || 0)}{" "}
+                        made
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {log.attempts_left || 0} left
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {log.next_call_scheduled ? (
+                        <div className="text-sm">
+                          {new Date(
+                            log.next_call_scheduled
+                          ).toLocaleDateString()}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">-</span>
+                      )}
+                    </TableCell>
                     <TableCell>
                       {new Date(log.started_at).toLocaleTimeString()}
                     </TableCell>
