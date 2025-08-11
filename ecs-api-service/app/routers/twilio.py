@@ -202,6 +202,7 @@ async def create_hybrid_twiml_response(
             if should_hangup:
                 twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    <Pause length="2"/>
     <Play>{audio_url}</Play>
     <Pause length="1"/>
     <Hangup/>
@@ -210,7 +211,7 @@ async def create_hybrid_twiml_response(
                 twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
-    <Gather action="{gather_action}" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="{gather_action}" actionOnEmptyResult="true" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
         <Pause length="1"/>
     </Gather>
     <Say voice="Polly.Joanna">I didn't catch that. Could you please repeat your response?</Say>
