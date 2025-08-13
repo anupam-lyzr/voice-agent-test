@@ -620,21 +620,21 @@ class SessionRepository:
     async def save_session(self, session: CallSession) -> bool:
         """Save or update call session"""
         try:
-            # Create document dict without _id field to avoid immutable field error
-            session_dict = session.model_dump()
+            # Create document dict with proper field mapping
+            session_dict = session.model_dump(by_alias=True)
             
             # Remove _id if it exists to prevent immutable field error
             if "_id" in session_dict:
                 del session_dict["_id"]
             
-            # Ensure twilio_call_sid is not None
-            if not session_dict.get("twilio_call_sid"):
+            # Ensure twilio_call_sid is not None (check both field name and alias)
+            if not session_dict.get("twilio_call_sid") and not session_dict.get("twilioCallSid"):
                 logger.warning(f"⚠️ twilio_call_sid is None for session {session.session_id}")
                 return False
             
-            # Use twilio_call_sid as the unique identifier for upsert
+            # Use twilioCallSid as the unique identifier for upsert
             result = await self.db.call_sessions.replace_one(
-                {"twilio_call_sid": session.twilio_call_sid},
+                {"twilioCallSid": session.twilio_call_sid},
                 session_dict,
                 upsert=True
             )

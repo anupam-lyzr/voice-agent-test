@@ -400,9 +400,13 @@ async def get_call_details(call_id: str):
             "summary": summary,
             "metrics": {
                 "total_duration": session.session_metrics.total_call_duration_seconds if session.session_metrics else 0,
-                "transcription_latency_avg": session.session_metrics.avg_transcription_latency_ms if session.session_metrics else 0,
-                "tts_latency_avg": session.session_metrics.avg_tts_latency_ms if session.session_metrics else 0,
-                "total_latency_avg": session.session_metrics.avg_total_latency_ms if session.session_metrics else 0
+                "avg_response_time": session.session_metrics.avg_response_time_ms if session.session_metrics else 0,
+                "fastest_response": session.session_metrics.fastest_response_ms if session.session_metrics else 0,
+                "slowest_response": session.session_metrics.slowest_response_ms if session.session_metrics else 0,
+                "total_turns": session.session_metrics.total_turns if session.session_metrics else 0,
+                "static_responses": session.session_metrics.static_responses_used if session.session_metrics else 0,
+                "dynamic_responses": session.session_metrics.dynamic_responses_used if session.session_metrics else 0,
+                "avg_transcription_confidence": session.session_metrics.avg_transcription_confidence if session.session_metrics else 0
             },
             "is_test_call": getattr(session, 'is_test_call', False)
         }
@@ -469,19 +473,23 @@ async def get_performance_metrics():
                         {"$match": {"session_metrics": {"$exists": True}}},
                         {"$group": {
                             "_id": None,
-                            "avg_transcription_latency": {"$avg": "$session_metrics.avg_transcription_latency_ms"},
-                            "avg_tts_latency": {"$avg": "$session_metrics.avg_tts_latency_ms"},
-                            "avg_total_latency": {"$avg": "$session_metrics.avg_total_latency_ms"},
-                            "total_calls": {"$sum": 1}
+                            "avg_response_time": {"$avg": "$session_metrics.avg_response_time_ms"},
+                            "avg_transcription_confidence": {"$avg": "$session_metrics.avg_transcription_confidence"},
+                            "total_calls": {"$sum": 1},
+                            "total_turns": {"$sum": "$session_metrics.total_turns"},
+                            "static_responses": {"$sum": "$session_metrics.static_responses_used"},
+                            "dynamic_responses": {"$sum": "$session_metrics.dynamic_responses_used"}
                         }}
                     ]
                     
                     async for doc in db_client.database.call_sessions.aggregate(pipeline):
                         performance_data["current_metrics"] = {
-                            "avg_transcription_latency_ms": round(doc.get("avg_transcription_latency", 0)),
-                            "avg_tts_latency_ms": round(doc.get("avg_tts_latency", 0)),
-                            "avg_total_latency_ms": round(doc.get("avg_total_latency", 0)),
-                            "calls_analyzed": doc.get("total_calls", 0)
+                            "avg_response_time_ms": round(doc.get("avg_response_time", 0)),
+                            "avg_transcription_confidence": round(doc.get("avg_transcription_confidence", 0), 2),
+                            "calls_analyzed": doc.get("total_calls", 0),
+                            "total_turns": doc.get("total_turns", 0),
+                            "static_responses": doc.get("static_responses", 0),
+                            "dynamic_responses": doc.get("dynamic_responses", 0)
                         }
         except Exception as e:
             logger.warning(f"Could not get performance metrics: {e}")
@@ -705,7 +713,7 @@ async def initiate_test_call(call_request: TestCallRequest):
             from shared.models.call_session import CallSession
             session = CallSession(
                 session_id=str(uuid.uuid4()),
-                twilio_call_sid=call.sid,
+                twilio_call_sid=call.sid,  # Use the actual field name
                 client_id=call_request.client_id,
                 phone_number=client.client.phone,
                 lyzr_agent_id=settings.lyzr_conversation_agent_id,
@@ -1390,3 +1398,57 @@ async def get_system_health():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+@router.post("/create-test-session")
+async def create_test_session():
+    """Create a test session in the database for testing email functionality"""
+    try:
+        from shared.models.call_session import CallSession, CallStatus as CallStatusEnum, ConversationStage
+        from shared.utils.database import db_client
+        from datetime import datetime, timedelta
+        import uuid
+        
+        if db_client is None or db_client.database is None:
+            raise HTTPException(503, "Database not available")
+        
+        # Create a test session with "scheduled" outcome
+        test_session = CallSession(
+            session_id=str(uuid.uuid4()),
+            twilioCallSid=f"TEST_{uuid.uuid4().hex[:8]}",  # Use the alias name
+            client_id="test_client_id",
+            phone_number="+15551234567",
+            lyzr_agent_id="test_agent_id",
+            lyzr_session_id=f"test_{uuid.uuid4().hex[:8]}",
+            is_test_call=True,
+            client_data={
+                "client_name": "Test Client",
+                "first_name": "Test",
+                "agent_name": "Test Agent",
+                "last_agent": "Test Agent"
+            },
+            call_status=CallStatusEnum.COMPLETED,
+            conversation_stage=ConversationStage.COMPLETED,
+            started_at=datetime.utcnow() - timedelta(minutes=30),
+            completed_at=datetime.utcnow() - timedelta(minutes=5),
+            final_outcome="scheduled",
+            session_metrics={
+                "total_call_duration_seconds": 180.0,
+                "total_turns": 5,
+                "avg_response_time_ms": 2000.0
+            }
+        )
+        
+        # Save to database
+        await db_client.database.call_sessions.insert_one(test_session.model_dump(by_alias=True))
+        
+        return {
+            "success": True,
+            "session_id": test_session.session_id,
+            "twilio_call_sid": test_session.twilio_call_sid,
+            "final_outcome": test_session.final_outcome,
+            "message": "Test session created successfully for email testing"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Create test session error: {e}")
+        raise HTTPException(500, f"Failed to create test session: {str(e)}")

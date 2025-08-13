@@ -3,7 +3,7 @@ Call Session Models
 Models for managing real-time call sessions and conversation state
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -59,6 +59,19 @@ class ConversationTurn(BaseModel):
     response_type: ResponseType = Field(..., description="Type of response used")
     response_generation_time_ms: Optional[float] = Field(None, description="Time to generate response")
     
+    @validator('response_type', pre=True)
+    def validate_response_type(cls, v):
+        """Convert invalid response_type values to valid ones"""
+        if isinstance(v, str):
+            v = v.lower()
+            if v in ['static', 'static_audio']:
+                return ResponseType.STATIC_AUDIO
+            elif v in ['dynamic', 'dynamic_tts']:
+                return ResponseType.DYNAMIC_TTS
+            elif v == 'hybrid':
+                return ResponseType.HYBRID
+        return v
+    
     # Audio details
     audio_url: Optional[str] = Field(None, description="URL to audio file")
     audio_duration_seconds: Optional[float] = Field(None, description="Audio duration")
@@ -72,6 +85,25 @@ class ConversationTurn(BaseModel):
     conversation_stage: ConversationStage = Field(..., description="Stage when turn occurred")
     customer_intent: Optional[str] = Field(None, description="Detected customer intent")
     confidence_score: Optional[float] = Field(None, description="Intent confidence")
+    
+    @validator('conversation_stage', pre=True)
+    def validate_turn_conversation_stage(cls, v):
+        """Convert invalid conversation_stage values to valid ones"""
+        if isinstance(v, str):
+            v = v.lower()
+            if v == 'goodbye':
+                return ConversationStage.CLOSING
+            elif v in ['greeting', 'hello']:
+                return ConversationStage.GREETING
+            elif v in ['interest', 'interested']:
+                return ConversationStage.INTEREST_CHECK
+            elif v in ['schedule', 'scheduling']:
+                return ConversationStage.SCHEDULING
+            elif v in ['dnc', 'do_not_call']:
+                return ConversationStage.DNC_QUESTION
+            elif v in ['complete', 'completed', 'done']:
+                return ConversationStage.COMPLETED
+        return v
 
 class SessionMetrics(BaseModel):
     """Performance metrics for the call session"""
@@ -100,21 +132,44 @@ class CallSession(BaseModel):
     # Session identification
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     session_id: str = Field(..., description="Unique session identifier")
-    twilio_call_sid: str = Field(..., description="Twilio call SID")
+    twilio_call_sid: Optional[str] = Field(None, alias="twilioCallSid", description="Twilio call SID")
     client_id: str = Field(..., description="Client MongoDB ID")
     
     # Call details
     call_status: CallStatus = Field(default=CallStatus.INITIATED, description="Current call status")
     phone_number: str = Field(..., description="Client phone number")
     direction: str = Field(default="outbound", description="Call direction")
-    no_speech_count: int = 0
-    # ADD THIS FIELD - This is the missing field causing the error
-    client_data: Dict[str, Any] = Field(default_factory=dict, description="Client information for personalization")
+    no_speech_count: int = Field(default=0, description="Number of consecutive no-speech events")
     
     # Conversation state
     conversation_stage: ConversationStage = Field(default=ConversationStage.GREETING, description="Current conversation stage")
     conversation_turns: List[ConversationTurn] = Field(default_factory=list, description="All conversation turns")
     current_turn_number: int = Field(default=0, description="Current turn number")
+    
+    @validator('conversation_stage', pre=True)
+    def validate_session_conversation_stage(cls, v):
+        """Convert invalid conversation_stage values to valid ones"""
+        if isinstance(v, str):
+            v = v.lower()
+            if v == 'goodbye':
+                return ConversationStage.CLOSING
+            elif v in ['greeting', 'hello']:
+                return ConversationStage.GREETING
+            elif v in ['interest', 'interested']:
+                return ConversationStage.INTEREST_CHECK
+            elif v in ['schedule', 'scheduling']:
+                return ConversationStage.SCHEDULING
+            elif v in ['dnc', 'do_not_call']:
+                return ConversationStage.DNC_QUESTION
+            elif v in ['complete', 'completed', 'done']:
+                return ConversationStage.COMPLETED
+        return v
+    
+    # Context and memory
+    conversation_context: Dict[str, Any] = Field(default_factory=dict, description="Conversation context")
+    customer_preferences: Dict[str, Any] = Field(default_factory=dict, description="Customer preferences discovered")
+    detected_intents: List[str] = Field(default_factory=list, description="All detected customer intents")
+    client_data: Dict[str, Any] = Field(default_factory=dict, description="Client information for personalization")
     
     # LYZR integration
     lyzr_agent_id: str = Field(..., description="LYZR agent ID for conversations")
@@ -128,6 +183,8 @@ class CallSession(BaseModel):
     # Call outcome
     final_outcome: Optional[str] = Field(None, description="Final call outcome")
     customer_interested: Optional[bool] = Field(None, description="Whether customer expressed interest")
+    agent_assigned: Optional[str] = Field(None, description="Agent assigned if interested")
+    meeting_scheduled: Optional[datetime] = Field(None, description="Meeting scheduled time")
     
     # Metrics and performance
     session_metrics: SessionMetrics = Field(default_factory=SessionMetrics, description="Performance metrics")

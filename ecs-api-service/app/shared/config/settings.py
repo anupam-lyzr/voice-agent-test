@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # AWS Configuration
     aws_region: Optional[str] = Field(default=None)
     aws_account_id: Optional[str] = Field(default=None)
+    aws_session_token: Optional[str] = Field(default=None)
     
     # Database Configuration with defaults
     documentdb_host: str = Field(default="localhost")

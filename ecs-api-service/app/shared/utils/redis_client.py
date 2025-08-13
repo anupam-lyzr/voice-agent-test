@@ -230,7 +230,12 @@ class SessionCache:
     
     async def save_session(self, session: CallSession) -> bool:
         """Save session to cache"""
-        key = f"{self.session_prefix}{session.session_id}"
+        # Store by twilio_call_sid for easier retrieval
+        if not session.twilio_call_sid:
+            logger.warning(f"⚠️ Cannot cache session {session.session_id}: twilio_call_sid is None")
+            return False
+            
+        key = f"{self.session_prefix}{session.twilio_call_sid}"
         session_data = session.model_dump(mode='json')
         
         success = await self.redis.set(key, session_data, ttl=settings.session_cache_ttl)
@@ -239,7 +244,7 @@ class SessionCache:
             # Add to active calls set
             await self.redis.hset(
                 self.active_calls_key,
-                session.session_id,
+                session.twilio_call_sid,
                 {
                     "phone_number": session.phone_number,
                     "status": session.call_status.value,
@@ -250,27 +255,27 @@ class SessionCache:
         
         return success
     
-    async def get_session(self, session_id: str) -> Optional[CallSession]:
-        """Get session from cache"""
-        key = f"{self.session_prefix}{session_id}"
+    async def get_session(self, twilio_call_sid: str) -> Optional[CallSession]:
+        """Get session from cache by twilio_call_sid"""
+        key = f"{self.session_prefix}{twilio_call_sid}"
         session_data = await self.redis.get(key)
         
         if session_data:
             try:
                 return CallSession(**session_data)
             except Exception as e:
-                logger.error(f"Failed to deserialize session {session_id}: {e}")
+                logger.error(f"Failed to deserialize session for call_sid {twilio_call_sid}: {e}")
                 return None
         
         return None
     
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete session from cache"""
-        key = f"{self.session_prefix}{session_id}"
+    async def delete_session(self, twilio_call_sid: str) -> bool:
+        """Delete session from cache by twilio_call_sid"""
+        key = f"{self.session_prefix}{twilio_call_sid}"
         
         # Remove from both session cache and active calls
         deleted = await self.redis.delete(key)
-        await self.redis.client.hdel(self.active_calls_key, session_id)
+        await self.redis.client.hdel(self.active_calls_key, twilio_call_sid)
         
         return deleted
     
@@ -293,8 +298,8 @@ class SessionCache:
                 exists = await self.redis.exists(key)
                 if not exists:
                     # Session expired, remove from active calls
-                    session_id = key.replace(self.session_prefix, "")
-                    await self.redis.client.hdel(self.active_calls_key, session_id)
+                    twilio_call_sid = key.replace(self.session_prefix, "")
+                    await self.redis.client.hdel(self.active_calls_key, twilio_call_sid)
                     cleaned_count += 1
             
             logger.info(f"Cleaned up {cleaned_count} expired sessions")

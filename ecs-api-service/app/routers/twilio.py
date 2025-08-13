@@ -88,11 +88,7 @@ async def get_client_by_phone(phone: str) -> Optional[Client]:
 async def cache_session(session: CallSession):
     """Cache session with proper twilio_call_sid setting"""
     try:
-        # Ensure twilio_call_sid is set (was causing duplicate key errors)
-        if not session.twilio_call_sid and hasattr(session, 'CallSid'):
-            session.twilio_call_sid = session.CallSid
-        
-        # Additional validation to prevent null twilio_call_sid
+        # Ensure twilio_call_sid is set
         if not session.twilio_call_sid:
             logger.error(f"❌ Cannot cache session {session.session_id}: twilio_call_sid is None")
             return
@@ -124,7 +120,7 @@ async def cache_session(session: CallSession):
                         try:
                             await db_client.database.call_sessions.replace_one(
                                 {"session_id": session.session_id},
-                                session.dict(by_alias=True),
+                                session.model_dump(by_alias=True),
                                 upsert=True
                             )
                             logger.info(f"✅ Session updated via upsert: {session.session_id}")
@@ -132,7 +128,7 @@ async def cache_session(session: CallSession):
                             logger.error(f"❌ Upsert failed: {upsert_error}")
                             # Try to delete and re-insert
                             try:
-                                await db_client.database.call_sessions.delete_one({"twilio_call_sid": session.twilio_call_sid})
+                                await db_client.database.call_sessions.delete_one({"twilioCallSid": session.twilio_call_sid})
                                 await session_repo.save_session(session)
                                 logger.info(f"✅ Session re-saved after cleanup: {session.session_id}")
                             except Exception as cleanup_error:
@@ -159,10 +155,10 @@ async def get_cached_session(call_sid: str) -> Optional[CallSession]:
         # Try database
         session_repo = await get_session_repo()
         if session_repo:
-            # Search by twilio_call_sid
+            # Search by twilioCallSid
             from shared.utils.database import db_client
             if db_client is not None and db_client.database is not None:
-                doc = await db_client.database.call_sessions.find_one({"twilio_call_sid": call_sid})
+                doc = await db_client.database.call_sessions.find_one({"twilioCallSid": call_sid})
                 if doc:
                     return CallSession(**doc)
         
@@ -307,9 +303,10 @@ async def voice_webhook(
                 logger.info(f"✅ Using cached session for {CallSid}, is_test_call: {session.is_test_call}")
             else:
                 # Create new session
+                logger.info(f"🔧 Creating new session with CallSid: {CallSid}")
                 session = CallSession(
                     session_id=str(uuid.uuid4()),
-                    twilio_call_sid=CallSid,
+                    twilio_call_sid=CallSid,  # Use the actual field name
                     client_id=str(client.id) if client else "unknown",
                     phone_number=client_phone,
                     lyzr_agent_id=settings.lyzr_conversation_agent_id,
@@ -317,6 +314,7 @@ async def voice_webhook(
                     client_data=client_data,
                     is_test_call=(is_test_call == "true") or (client_phone.startswith("+1555") if client_phone else False)
                 )
+                logger.info(f"🔧 Session created with twilio_call_sid: {session.twilio_call_sid}")
                 
                 # Set initial session state
                 session.no_speech_count = 0
@@ -396,6 +394,11 @@ async def process_speech_webhook(
                 content=create_hangup_twiml("I'm sorry, there was a problem with the call. Please call us back."),
                 media_type="application/xml"
             )
+        
+        # Ensure twilio_call_sid is set correctly
+        if not session.twilio_call_sid:
+            session.twilio_call_sid = CallSid
+            logger.info(f"🔧 Fixed missing twilio_call_sid for session {session.session_id}: {CallSid}")
         
         # Initialize no_speech_count if not present
         if not hasattr(session, 'no_speech_count'):
@@ -829,15 +832,15 @@ async def status_webhook(
                         try:
                             from shared.utils.database import db_client
                             if db_client is not None and db_client.database is not None:
-                                # Create document dict without _id field to avoid immutable field error
-                                session_dict = session.model_dump()
+                                # Create document dict with proper field mapping
+                                session_dict = session.model_dump(by_alias=True)
                                 # Remove _id if it exists to prevent immutable field error
                                 if "_id" in session_dict:
                                     del session_dict["_id"]
                                 
                                 # Use upsert to handle both insert and update
                                 await db_client.database.call_sessions.replace_one(
-                                    {"twilio_call_sid": CallSid},
+                                    {"twilioCallSid": CallSid},
                                     session_dict,
                                     upsert=True
                                 )

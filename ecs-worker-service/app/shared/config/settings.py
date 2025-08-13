@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # AWS Configuration
     aws_region: str = Field(default="us-east-1", env="AWS_REGION")
     aws_account_id: str = Field(default="", env="AWS_ACCOUNT_ID")
+    aws_session_token: Optional[str] = Field(default=None, env="AWS_SESSION_TOKEN")
     
     # Database Configuration (DocumentDB/MongoDB)
     documentdb_host: str = Field(default="localhost", env="DOCUMENTDB_HOST")

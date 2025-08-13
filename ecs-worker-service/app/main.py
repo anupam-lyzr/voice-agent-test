@@ -284,20 +284,29 @@ class WorkerService:
         try:
             # Get completed calls that need email notifications
             if db_client is None or db_client.database is None:
+                logger.warning("⚠️ Database not available for email processing")
                 return
 
             # Find calls completed in the last hour that need email processing
             one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+            logger.info(f"🔍 Looking for completed calls since {one_hour_ago}")
 
             cursor = db_client.database.call_sessions.find({
                 "completed_at": {"$gte": one_hour_ago},
-                "email_sent": {"$ne": True},  # Only process calls that haven't sent emails
+                "$or": [
+                    {"email_sent": {"$ne": True}},
+                    {"email_sent": {"$exists": False}}
+                ],
                 "final_outcome": {"$exists": True, "$ne": None}
             })
 
             processed_count = 0
+            total_found = 0
             async for doc in cursor:
+                total_found += 1
                 try:
+                    logger.info(f"📧 Processing email for session: {doc.get('session_id', 'unknown')} with outcome: {doc.get('final_outcome', 'unknown')}")
+                    
                     # Handle invalid enum values gracefully
                     try:
                         session = CallSession(**doc)
@@ -308,8 +317,10 @@ class WorkerService:
 
                     # Determine email stage based on outcome
                     email_stage = self._determine_email_stage(session.final_outcome)
+                    logger.info(f"📧 Email stage determined: {email_stage} for outcome: {session.final_outcome}")
 
                     if not email_stage:
+                        logger.warning(f"⚠️ No email stage mapping found for outcome: {session.final_outcome}")
                         continue
 
                     # Get client information
@@ -321,10 +332,20 @@ class WorkerService:
                         try:
                             from shared.utils.database import client_repo
                             if client_repo:
+                                logger.info(f"🔍 Looking up client by ID: {session.client_id}")
                                 client = await client_repo.get_client_by_id(session.client_id)
-                                if client and hasattr(client.client, 'email') and client.client.email:
-                                    client_email = client.client.email
-                                    client_name = f"{client.client.first_name} {client.client.last_name}"
+                                if client:
+                                    logger.info(f"✅ Found client: {client.client.full_name}")
+                                    if hasattr(client.client, 'email') and client.client.email:
+                                        client_email = client.client.email
+                                        client_name = f"{client.client.first_name} {client.client.last_name}"
+                                        logger.info(f"✅ Client email found: {client_email}")
+                                    else:
+                                        logger.warning(f"⚠️ Client {client.client.full_name} has no email address")
+                                else:
+                                    logger.warning(f"⚠️ No client found for ID: {session.client_id}")
+                            else:
+                                logger.warning("⚠️ Client repository not available")
                         except Exception as e:
                             logger.warning(f"Could not get client email: {e}")
 
@@ -357,8 +378,10 @@ class WorkerService:
                     logger.error(f"❌ Error processing email for call {doc.get('session_id', 'unknown')}: {e}")
                     continue
 
-            if processed_count > 0:
-                logger.info(f"📧 Processed {processed_count} email notifications")
+            if total_found > 0:
+                logger.info(f"📧 Found {total_found} completed calls, processed {processed_count} email notifications")
+            else:
+                logger.info("📧 No completed calls found for email processing")
 
         except Exception as e:
             logger.error(f"❌ Email notification processing error: {e}")
@@ -368,6 +391,7 @@ class WorkerService:
         stage_mapping = {
             "interested": "interested",
             "not_interested": "not_interested",
+            "scheduled": "meeting_scheduled",
             "scheduled_morning": "meeting_scheduled",
             "scheduled_afternoon": "meeting_scheduled",
             "follow_up": "follow_up",
@@ -395,8 +419,13 @@ class WorkerService:
                     summary["key_points"].append(turn.customer_speech[:100] + "...")
         
         # Add meeting time if scheduled
-        if session.final_outcome in ["scheduled_morning", "scheduled_afternoon"]:
-            summary["meeting_time"] = "Tomorrow at 10 AM" if session.final_outcome == "scheduled_morning" else "Tomorrow at 2 PM"
+        if session.final_outcome in ["scheduled", "scheduled_morning", "scheduled_afternoon"]:
+            if session.final_outcome == "scheduled_morning":
+                summary["meeting_time"] = "Tomorrow at 10 AM"
+            elif session.final_outcome == "scheduled_afternoon":
+                summary["meeting_time"] = "Tomorrow at 2 PM"
+            else:
+                summary["meeting_time"] = "TBD - You'll receive calendar invites shortly"
         
         return summary
     
