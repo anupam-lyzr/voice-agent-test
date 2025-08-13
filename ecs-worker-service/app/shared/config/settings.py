@@ -61,9 +61,17 @@ class Settings(BaseSettings):
     google_service_account_file: str = Field(default="", env="GOOGLE_SERVICE_ACCOUNT_FILE")
 
     
-    # Email Configuration (SES)
+    # Email Configuration (SES/SMTP)
     ses_region: str = Field(default="us-east-1", env="SES_REGION")
-    from_email: str = Field(default="noreply@altruisadvisor.com", env="FROM_EMAIL")
+    from_email: str = Field(default="aag@ca.lyzr.app", env="FROM_EMAIL")  # Updated default to match your preference
+    
+    # SMTP Configuration (preferred over SES SDK)
+    smtp_host: Optional[str] = Field(default=None, env="SMTP_HOST")
+    smtp_port: int = Field(default=587, env="SMTP_PORT")
+    smtp_username: Optional[str] = Field(default=None, env="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(default=None, env="SMTP_PASSWORD")
+    smtp_sender_email: Optional[str] = Field(default=None, env="SMTP_SENDER_EMAIL")
+    smtp_reply_to_email: Optional[str] = Field(default=None, env="SMTP_REPLY_TO_EMAIL")
     
     # S3 Configuration
     s3_bucket_audio: str = Field(default="voice-agent-audio-bucket", env="S3_BUCKET_AUDIO")
@@ -75,7 +83,7 @@ class Settings(BaseSettings):
     max_call_attempts: int = Field(default=6, env="MAX_CALL_ATTEMPTS")
     
     # Voice Processing Settings
-    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0", env="VOICE_ID")  # Adam voice
+    default_voice_id: str = Field(default="iP95p4xoKVk53GoZ742B", env="VOICE_ID")  # Adam voice
     voice_stability: float = Field(default=0.35, env="VOICE_STABILITY")
     voice_similarity_boost: float = Field(default=0.75, env="VOICE_SIMILARITY_BOOST") 
     voice_style: float = Field(default=0.45, env="VOICE_STYLE")

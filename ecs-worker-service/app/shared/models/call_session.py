@@ -27,6 +27,7 @@ class ConversationStage(str, Enum):
     DNC_QUESTION = "dnc_question"
     CLOSING = "closing"
     COMPLETED = "completed"
+    VOICEMAIL = "voicemail"
 
 class ResponseType(str, Enum):
     """Type of response being used"""
@@ -93,6 +94,8 @@ class ConversationTurn(BaseModel):
                 return ConversationStage.DNC_QUESTION
             elif v in ['complete', 'completed', 'done']:
                 return ConversationStage.COMPLETED
+            elif v in ['voicemail', 'vm']:
+                return ConversationStage.VOICEMAIL
         return v
 
 class SessionMetrics(BaseModel):
@@ -150,6 +153,8 @@ class CallSession(BaseModel):
                 return ConversationStage.DNC_QUESTION
             elif v in ['complete', 'completed', 'done']:
                 return ConversationStage.COMPLETED
+            elif v in ['voicemail', 'vm']:
+                return ConversationStage.VOICEMAIL
         return v
     
     conversation_turns: List[ConversationTurn] = Field(default_factory=list, description="All conversation turns")

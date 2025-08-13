@@ -35,12 +35,12 @@ active_sessions: Dict[str, CallSession] = {}
 voice_processor = VoiceProcessor()
 hybrid_tts = HybridTTSService()
 
-# Emergency fallback greeting
+# Emergency fallback greeting - will be replaced with hybrid TTS
 def create_emergency_greeting_twiml(client_name: str = "there") -> str:
     """Create emergency greeting TwiML when services fail"""
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna">Hello {client_name}, this is Alex from Altruis Advisor Group. We're experiencing technical difficulties. Please call us back later. Thank you.</Say>
+    <Say voice="Polly.Matthew">Hello {client_name}, this is Alex from Altruis Advisor Group. We're experiencing technical difficulties. Please call us back later. Thank you.</Say>
     <Hangup/>
 </Response>'''
 
@@ -205,14 +205,14 @@ async def create_hybrid_twiml_response(
             elif should_gather:
                 twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    {'<Pause length="2"/>' if response_type == "greeting" else ''}
+    {'<Pause length="1"/>' if response_type == "greeting" else ''}
     <Play>{audio_url}</Play>
     <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
-        <Pause length="1"/>
+        <Pause length="2"/>
     </Gather>
-    <Say voice="Polly.Joanna">I didn't catch that. Could you please repeat your response?</Say>
-    <Pause length="2"/>
-    <Say voice="Polly.Joanna">Thank you for calling. Goodbye.</Say>
+    <Say voice="Polly.Matthew">I didn't catch that. Could you please repeat your response?</Say>
+    <Pause length="1"/>
+    <Say voice="Polly.Matthew">Thank you for calling. Goodbye.</Say>
     <Hangup/>
 </Response>"""
             else:
@@ -224,14 +224,63 @@ async def create_hybrid_twiml_response(
             
             return Response(content=twiml, media_type="application/xml")
         
-        # Fallback if hybrid TTS fails
-        logger.warning(f"⚠️ Hybrid TTS failed for {response_type}, using fallback")
+        # Fallback if hybrid TTS fails - try to generate audio with ElevenLabs directly
+        logger.warning(f"⚠️ Hybrid TTS failed for {response_type}, trying direct ElevenLabs fallback")
         client_name = client_data.get("client_name", "there") if client_data else "there"
         
+        try:
+            # Try to generate fallback audio using ElevenLabs directly
+            from services.elevenlabs_client import elevenlabs_client
+            
+            if should_hangup:
+                fallback_text = f"Thank you for your time, {client_name}. Have a wonderful day!"
+            else:
+                fallback_text = f"Hello {client_name}, this is Alex from Altruis Advisor Group. We're experiencing technical difficulties. Please call us back later. Thank you."
+            
+            # Generate audio with your custom voice
+            audio_result = await elevenlabs_client.generate_speech(fallback_text)
+            
+            if audio_result.get("success") and audio_result.get("audio_data"):
+                # Save fallback audio to temp directory
+                import uuid
+                from pathlib import Path
+                
+                temp_dir = Path("static/audio/temp")
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                
+                filename = f"fallback_{uuid.uuid4().hex[:8]}.mp3"
+                temp_path = temp_dir / filename
+                
+                with open(temp_path, "wb") as f:
+                    f.write(audio_result["audio_data"])
+                
+                audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
+                
+                # Create TwiML with generated audio
+                if should_hangup:
+                    fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+                else:
+                    fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+                
+                logger.info(f"✅ Generated fallback audio with ElevenLabs voice")
+                return Response(content=fallback_twiml, media_type="application/xml")
+        
+        except Exception as fallback_error:
+            logger.error(f"❌ ElevenLabs fallback also failed: {fallback_error}")
+        
+        # Final fallback to Polly if everything else fails
         if should_hangup:
             fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna">Thank you for your time, {client_name}. Have a wonderful day!</Say>
+    <Say voice="Polly.Matthew">Thank you for your time, {client_name}. Have a wonderful day!</Say>
     <Hangup/>
 </Response>"""
         else:
@@ -893,6 +942,210 @@ async def status_webhook(
         import traceback
         logger.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
+
+@router.post("/voicemail")
+async def voicemail_webhook(
+    request: Request,
+    CallSid: str = Form(...),
+    From: Optional[str] = Form(None),
+    To: Optional[str] = Form(None),
+    Direction: Optional[str] = Form(None)
+):
+    """Handle voicemail scenarios with personalized audio"""
+    
+    logger.info(f"📱 Voicemail webhook: {CallSid} - From: {From} - To: {To} - Direction: {Direction}")
+    
+    try:
+        # Determine client phone based on call direction
+        client_phone = To if Direction == "outbound-api" else From
+        logger.info(f"🔍 Looking up client by phone: {client_phone}")
+        
+        # Initialize client data with defaults
+        client_data = {
+            "client_name": "there",
+            "first_name": "there"
+        }
+        
+        # Try to get client from database
+        client = await get_client_by_phone(client_phone)
+        if client:
+            client_data = {
+                "client_name": client.client.first_name,
+                "first_name": client.client.first_name
+            }
+            logger.info(f"✅ Found client for voicemail: {client.client.first_name}")
+        else:
+            logger.warning(f"⚠️ Client not found for voicemail: {client_phone}")
+        
+        # Get or create session
+        session = active_sessions.get(CallSid)
+        if not session:
+            session = await get_cached_session(CallSid)
+        
+        if not session:
+            # Create a new session for voicemail
+            session = CallSession(
+                session_id=str(uuid.uuid4()),
+                twilio_call_sid=CallSid,
+                client_id=str(client.id) if client else "unknown",
+                phone_number=client_phone,
+                lyzr_agent_id=settings.lyzr_conversation_agent_id,
+                lyzr_session_id=f"voicemail-{CallSid}-{uuid.uuid4().hex[:8]}",
+                client_data=client_data,
+                call_status=CallStatusEnum.NO_ANSWER,
+                final_outcome="voicemail",
+                conversation_stage=ConversationStage.VOICEMAIL
+            )
+            logger.info(f"✅ Created new session for voicemail: {session.session_id}")
+        
+        # Generate personalized voicemail audio
+        try:
+            from services.segmented_audio_service import SegmentedAudioService
+            audio_service = SegmentedAudioService()
+            
+            # Generate voicemail with client name
+            audio_result = await audio_service.generate_concatenated_audio(
+                template_name="voicemail",
+                replacements={
+                    "CLIENT_NAME": client_data["first_name"].lower()
+                }
+            )
+            
+            if audio_result.get("success") and audio_result.get("audio_url"):
+                # Create TwiML with personalized voicemail
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_result['audio_url']}</Play>
+    <Hangup/>
+</Response>"""
+                
+                # Update session
+                session.final_outcome = "voicemail"
+                session.completed_at = datetime.utcnow()
+                session.complete_call("voicemail")
+                
+                # Save session
+                await cache_session(session)
+                
+                # Save to database
+                session_repo = await get_session_repo()
+                if session_repo:
+                    await session_repo.save_session(session)
+                
+                logger.info(f"✅ Voicemail generated and played for {client_data['first_name']}")
+                return Response(content=twiml, media_type="application/xml")
+            else:
+                logger.error(f"❌ Failed to generate voicemail audio: {audio_result.get('error')}")
+                
+        except Exception as audio_error:
+            logger.error(f"❌ Audio generation error: {audio_error}")
+        
+        # Fallback to simple voicemail with ElevenLabs voice
+        try:
+            from services.elevenlabs_client import elevenlabs_client
+            
+            voicemail_text = f"Hello {client_data['first_name']}, this is Alex from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 833.227.8500. We look forward to hearing from you - take care!"
+            
+            # Generate audio with your custom voice
+            audio_result = await elevenlabs_client.generate_speech(voicemail_text)
+            
+            if audio_result.get("success") and audio_result.get("audio_data"):
+                # Save fallback audio to temp directory
+                import uuid
+                from pathlib import Path
+                
+                temp_dir = Path("static/audio/temp")
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                
+                filename = f"voicemail_fallback_{uuid.uuid4().hex[:8]}.mp3"
+                temp_path = temp_dir / filename
+                
+                with open(temp_path, "wb") as f:
+                    f.write(audio_result["audio_data"])
+                
+                audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
+                
+                fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+                
+                logger.info(f"✅ Generated voicemail fallback audio with ElevenLabs voice")
+            else:
+                # If ElevenLabs fails, use Polly as final fallback
+                fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Matthew">Hello {client_data['first_name']}, this is Alex from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 833.227.8500. We look forward to hearing from you - take care!</Say>
+    <Hangup/>
+</Response>"""
+        
+        except Exception as fallback_error:
+            logger.error(f"❌ ElevenLabs voicemail fallback failed: {fallback_error}")
+            # Final fallback to Polly
+            fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Matthew">Hello {client_data['first_name']}, this is Alex from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 833.227.8500. We look forward to hearing from you - take care!</Say>
+    <Hangup/>
+</Response>"""
+        
+        return Response(content=fallback_twiml, media_type="application/xml")
+        
+    except Exception as e:
+        logger.error(f"❌ Voicemail webhook error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        # Emergency fallback with ElevenLabs voice
+        try:
+            from services.elevenlabs_client import elevenlabs_client
+            
+            emergency_text = "Hello, this is Alex from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 833.227.8500. We look forward to hearing from you - take care!"
+            
+            # Generate audio with your custom voice
+            audio_result = await elevenlabs_client.generate_speech(emergency_text)
+            
+            if audio_result.get("success") and audio_result.get("audio_data"):
+                # Save fallback audio to temp directory
+                import uuid
+                from pathlib import Path
+                
+                temp_dir = Path("static/audio/temp")
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                
+                filename = f"emergency_fallback_{uuid.uuid4().hex[:8]}.mp3"
+                temp_path = temp_dir / filename
+                
+                with open(temp_path, "wb") as f:
+                    f.write(audio_result["audio_data"])
+                
+                audio_url = f"{settings.base_url.rstrip('/')}/static/audio/temp/{filename}"
+                
+                emergency_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+                
+                logger.info(f"✅ Generated emergency fallback audio with ElevenLabs voice")
+            else:
+                # If ElevenLabs fails, use Polly as final fallback
+                emergency_twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Matthew">Hello, this is Alex from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 833.227.8500. We look forward to hearing from you - take care!</Say>
+    <Hangup/>
+</Response>"""
+        
+        except Exception as emergency_error:
+            logger.error(f"❌ ElevenLabs emergency fallback failed: {emergency_error}")
+            # Final fallback to Polly
+            emergency_twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Matthew">Hello, this is Alex from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 833.227.8500. We look forward to hearing from you - take care!</Say>
+    <Hangup/>
+</Response>"""
+        
+        return Response(content=emergency_twiml, media_type="application/xml")
 
 @router.get("/test-connection")
 async def test_twilio_connection():

@@ -1,7 +1,7 @@
 {
-  "last_updated": "2025-08-06T09:48:19.531319",
+  "last_updated": "2025-08-13T10:49:00.987568",
   "segments": {
-    "count": 14,
+    "count": 16,
     "files": [
       "agent_intro_middle",
       "agent_intro_start",
@@ -16,55 +16,31 @@
       "no_schedule_start",
       "not_interested_start",
       "schedule_middle",
-      "schedule_start"
+      "schedule_start",
+      "voicemail_middle",
+      "voicemail_start"
     ]
   },
   "client_names": {
-    "count": 32,
+    "count": 12,
     "files": [
       "andrew",
-      "anthony",
-      "barbara",
       "brian",
       "charles",
-      "christopher",
-      "daniel",
-      "david",
       "edward",
-      "elizabeth",
       "george",
-      "james",
-      "jane",
-      "jennifer",
-      "jessica",
-      "john",
       "joseph",
       "kenneth",
-      "linda",
-      "lisa",
       "mary",
-      "matthew",
-      "michael",
-      "patricia",
       "richard",
-      "robert",
       "ronald",
-      "sarah",
       "steven",
-      "susan",
-      "thomas",
-      "william"
+      "thomas"
     ]
   },
   "agent_names": {
-    "count": 5,
-    "files": [
-      "anthony_fracchia",
-      "hineth_pettway",
-      "india_watson",
-      "keith_braswell",
-      "lashawn_boyd"
-    ]
+    "count": 0,
+    "files": []
   },
   "concatenation_templates": {
     "greeting": [
@@ -86,6 +62,11 @@
       "no_schedule_start",
       "[AGENT_NAME]",
       "no_schedule_middle"
+    ],
+    "voicemail": [
+      "voicemail_start",
+      "[CLIENT_NAME]",
+      "voicemail_middle"
     ]
   }
 }

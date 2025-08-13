@@ -16,6 +16,15 @@ try:
 except ImportError:
     AWS_SES_AVAILABLE = False
 
+# SMTP support
+try:
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    SMTP_AVAILABLE = True
+except ImportError:
+    SMTP_AVAILABLE = False
+
 from shared.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -25,10 +34,30 @@ class EmailService:
     
     def __init__(self):
         self.ses_client = None
-        self.from_email = getattr(settings, 'from_email', 'noreply@altruisadvisor.com')
+        self.smtp_config = None
         
-        # Initialize SES client if available
-        if AWS_SES_AVAILABLE:
+        # Check for SMTP configuration first (preferred method)
+        smtp_host = getattr(settings, 'smtp_host', None)
+        smtp_username = getattr(settings, 'smtp_username', None)
+        smtp_password = getattr(settings, 'smtp_password', None)
+        
+        if all([smtp_host, smtp_username, smtp_password]) and SMTP_AVAILABLE:
+            # Use SMTP method
+            self.smtp_config = {
+                'host': smtp_host,
+                'port': getattr(settings, 'smtp_port', 587),
+                'username': smtp_username,
+                'password': smtp_password,
+                'sender_email': getattr(settings, 'smtp_sender_email', 'aag@ca.lyzr.app'),
+                'reply_to': getattr(settings, 'smtp_reply_to_email', 'aag@ca.lyzr.app')
+            }
+            
+            # Set the from_email to use SMTP sender email
+            self.from_email = self.smtp_config['sender_email']
+            logger.info(f"✅ SMTP client configured: {smtp_host}:{self.smtp_config['port']}")
+            logger.info(f"✅ Using SMTP sender email: {self.from_email}")
+        elif AWS_SES_AVAILABLE:
+            # Fallback to AWS SDK method
             try:
                 region_name = getattr(settings, 'aws_region', 'us-east-1')
                 
@@ -45,15 +74,18 @@ class EmailService:
                     logger.info("✅ Using AWS session token (temporary credentials)")
                 
                 self.ses_client = boto3.client(**ses_kwargs)
-                logger.info("✅ SES client initialized with AWS")
-            except (NoCredentialsError, Exception) as e:
-                logger.warning(f"⚠️ SES not available: {e}")
-                self.ses_client = None
+                logger.info("✅ SES client initialized with AWS SDK")
+                
+                # Set from_email for SES
+                self.from_email = getattr(settings, 'from_email', 'aag@ca.lyzr.app')
+                
             except (NoCredentialsError, Exception) as e:
                 logger.warning(f"⚠️ SES not available: {e}")
                 self.ses_client = None
         else:
             logger.info("🔧 Running in mock mode - emails will be logged only")
+            # Set from_email for mock mode
+            self.from_email = getattr(settings, 'from_email', 'aag@ca.lyzr.app')
         
         # Email statistics
         self.emails_sent = 0
@@ -61,7 +93,7 @@ class EmailService:
 
     def is_configured(self) -> bool:
         """Check if email service is properly configured"""
-        return self.ses_client is not None
+        return self.ses_client is not None or self.smtp_config is not None
 
     async def send_conversation_stage_email(self, client_email: str, client_name: str, stage: str, call_summary: Dict[str, Any]) -> bool:
         """Send email based on conversation stage with proper timing"""
@@ -180,7 +212,7 @@ class EmailService:
             return False
 
     async def _send_email(self, to_email: str, subject: str, html_body: str, text_body: str) -> bool:
-        """Send email via SES with HTML and text versions"""
+        """Send email via SMTP (preferred) or SES with HTML and text versions"""
         if not self.is_configured():
             # Mock mode - just log the email
             logger.info(f"📧 MOCK EMAIL - To: {to_email}")
@@ -188,6 +220,48 @@ class EmailService:
             logger.info(f"📧 MOCK EMAIL - HTML Body: {html_body[:200]}...")
             return True
 
+        # Try SMTP first (preferred method)
+        if self.smtp_config:
+            return await self._send_email_smtp(to_email, subject, html_body, text_body)
+        
+        # Fallback to SES SDK
+        elif self.ses_client:
+            return await self._send_email_ses(to_email, subject, html_body, text_body)
+        
+        return False
+
+    async def _send_email_smtp(self, to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+        """Send email via SMTP"""
+        try:
+            # Create message
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = self.smtp_config['sender_email']
+            msg['To'] = to_email
+            msg['Reply-To'] = self.smtp_config['reply_to']
+            
+            # Attach text and HTML parts
+            text_part = MIMEText(text_body, 'plain', 'utf-8')
+            html_part = MIMEText(html_body, 'html', 'utf-8')
+            
+            msg.attach(text_part)
+            msg.attach(html_part)
+            
+            # Send via SMTP
+            with smtplib.SMTP(self.smtp_config['host'], self.smtp_config['port']) as server:
+                server.starttls()  # Enable TLS
+                server.login(self.smtp_config['username'], self.smtp_config['password'])
+                server.send_message(msg)
+            
+            logger.info(f"✅ Email sent via SMTP to {to_email}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ SMTP error: {e}")
+            return False
+
+    async def _send_email_ses(self, to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+        """Send email via SES SDK"""
         try:
             response = self.ses_client.send_email(
                 Source=self.from_email,
@@ -200,7 +274,7 @@ class EmailService:
                     }
                 }
             )
-            logger.info(f"✅ Email sent successfully: {response['MessageId']}")
+            logger.info(f"✅ Email sent via SES: {response['MessageId']}")
             return True
 
         except ClientError as e:

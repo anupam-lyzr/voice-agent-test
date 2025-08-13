@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings
 from pydantic import Field, validator
 from typing import Optional, List
 import os
+import pytz
+from datetime import datetime
 
 class Settings(BaseSettings):
     """Global application settings with proper defaults"""
@@ -42,7 +44,7 @@ class Settings(BaseSettings):
     
     # AI Service API Keys
     deepgram_api_key: str = Field(default="", env="DEEPGRAM_API_KEY")
-    elevenlabs_api_key: str = Field(default="")
+    elevenlabs_api_key: str = Field(default="", env="ELEVENLABS_API_KEY")
     
     # LYZR Configuration
     lyzr_api_base_url: str = Field(default="https://agent-prod.studio.lyzr.ai")
@@ -52,7 +54,7 @@ class Settings(BaseSettings):
     lyzr_api_key: Optional[str] = Field(default=None)
     
     # Voice Settings with defaults
-    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0")
+    default_voice_id: str = Field(default="iP95p4xoKVk53GoZ742B")
     voice_stability: float = Field(default=0.55)
     voice_similarity_boost: float = Field(default=0.70)
     voice_style: float = Field(default=0.2)
@@ -60,7 +62,6 @@ class Settings(BaseSettings):
     use_speaker_boost: bool = Field(default=True)
     elevenlabs_voice_id: Optional[str] = Field(default=None)
     elevenlabs_voice_speed: Optional[float] = Field(default=None)
-    elevenlabs_voice_settings: Optional[str] = Field(default=None)
 
     # CRM Configuration
     capsule_api_token: Optional[str] = Field(default=None)
@@ -70,9 +71,17 @@ class Settings(BaseSettings):
     google_calendar_client_id: Optional[str] = Field(default=None)
     google_calendar_client_secret: Optional[str] = Field(default=None)
 
-    # Email Configuration
+    # Email Configuration (SES/SMTP)
     ses_region: Optional[str] = Field(default=None)
-    from_email: Optional[str] = Field(default=None)
+    from_email: Optional[str] = Field(default="aag@ca.lyzr.app")  # Updated default to match your preference
+    
+    # SMTP Configuration (preferred over SES SDK)
+    smtp_host: Optional[str] = Field(default=None, env="SMTP_HOST")
+    smtp_port: int = Field(default=587, env="SMTP_PORT")
+    smtp_username: Optional[str] = Field(default=None, env="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(default=None, env="SMTP_PASSWORD")
+    smtp_sender_email: Optional[str] = Field(default=None, env="SMTP_SENDER_EMAIL")
+    smtp_reply_to_email: Optional[str] = Field(default=None, env="SMTP_REPLY_TO_EMAIL")
 
     # S3 Configuration
     s3_bucket_audio: Optional[str] = Field(default=None)

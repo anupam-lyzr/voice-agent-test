@@ -34,6 +34,7 @@ class ConversationStage(str, Enum):
     CONFIRMATION = "confirmation"
     OBJECTION_HANDLING = "objection_handling"
     GOODBYE = "goodbye"
+    VOICEMAIL = "voicemail"
     ERROR = "error"
 
 class ResponseType(str, Enum):
@@ -103,6 +104,8 @@ class ConversationTurn(BaseModel):
                 return ConversationStage.DNC_QUESTION
             elif v in ['complete', 'completed', 'done']:
                 return ConversationStage.COMPLETED
+            elif v in ['voicemail', 'vm']:
+                return ConversationStage.VOICEMAIL
         return v
 
 class SessionMetrics(BaseModel):
@@ -163,6 +166,8 @@ class CallSession(BaseModel):
                 return ConversationStage.DNC_QUESTION
             elif v in ['complete', 'completed', 'done']:
                 return ConversationStage.COMPLETED
+            elif v in ['voicemail', 'vm']:
+                return ConversationStage.VOICEMAIL
         return v
     
     # Context and memory

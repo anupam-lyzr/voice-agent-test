@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -39,11 +40,6 @@ class SegmentedAudioService:
         
         # Load manifest if exists
         self.manifest = self._load_manifest()
-        
-        # Performance tracking
-        self.concatenations_count = 0
-        self.cache_hits = 0
-        self.generation_time_total = 0.0
         
         # Updated templates based on your audio files
         self.templates = {
@@ -83,8 +79,60 @@ class SegmentedAudioService:
             "clarification": {
                 "segments": ["clarification"],
                 "description": "Clarification request"
+            },
+            "voicemail": {
+                "segments": ["voicemail_start", "[CLIENT_NAME]", "voicemail_middle"],
+                "description": "Personalized voicemail with client name and natural phone number"
             }
         }
+        
+        # Performance tracking
+        self.concatenations_count = 0
+        self.cache_hits = 0
+        self.generation_time_total = 0.0
+    
+    def convert_phone_to_natural_speech(self, phone_number: str) -> str:
+        """
+        Convert phone number to natural speech format
+        Example: "833.227.8500" -> "eight three three, two two seven, eight five zero zero"
+        """
+        # Remove any non-digit characters
+        digits_only = re.sub(r'[^\d]', '', phone_number)
+        
+        if not digits_only:
+            return phone_number
+        
+        # Convert each digit to word
+        digit_words = {
+            '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+            '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
+        }
+        
+        # Group digits for natural speaking (3-3-4 format for US numbers)
+        if len(digits_only) == 10:  # Standard US number
+            area_code = digits_only[:3]
+            prefix = digits_only[3:6]
+            line_number = digits_only[6:]
+            
+            # Convert each group to words
+            area_words = ' '.join([digit_words[d] for d in area_code])
+            prefix_words = ' '.join([digit_words[d] for d in prefix])
+            line_words = ' '.join([digit_words[d] for d in line_number])
+            
+            return f"{area_words}, {prefix_words}, {line_words}"
+        elif len(digits_only) == 11 and digits_only[0] == '1':  # US number with country code
+            area_code = digits_only[1:4]
+            prefix = digits_only[4:7]
+            line_number = digits_only[7:]
+            
+            area_words = ' '.join([digit_words[d] for d in area_code])
+            prefix_words = ' '.join([digit_words[d] for d in prefix])
+            line_words = ' '.join([digit_words[d] for d in line_number])
+            
+            return f"{area_words}, {prefix_words}, {line_words}"
+        else:
+            # For other formats, just convert each digit
+            return ' '.join([digit_words[d] for d in digits_only])
     
     def _load_manifest(self) -> Dict[str, Any]:
         """Load segments manifest if available"""
