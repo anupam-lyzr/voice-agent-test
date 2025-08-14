@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from routers.twilio import router as twilio_router
     from routers.dashboard import router as dashboard_router
+    from routers.slot_selection import router as slot_selection_router
     logger.info("✅ Routers imported successfully")
 except ImportError as import_error:
     logger.error(f"❌ Router import failed: {import_error}")
@@ -45,6 +46,7 @@ except ImportError as import_error:
     
     twilio_router = APIRouter(prefix="/twilio", tags=["Twilio"])
     dashboard_router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
+    slot_selection_router = APIRouter(prefix="/api", tags=["Slot Selection"])
     
     @twilio_router.post("/voice")
     async def emergency_voice_webhook(CallSid: str = Form(...)):
@@ -88,10 +90,14 @@ except ImportError as import_error:
     @dashboard_router.get("/test-clients")
     async def get_test_clients():
         return {"clients": [], "note": "Router needs to be properly configured"}
-        
-        @dashboard_router.get("/test-agents") 
-        async def get_test_agents():
-            return {"agents": [], "note": "Router needs to be properly configured"}
+    
+    @dashboard_router.get("/test-agents") 
+    async def get_test_agents():
+        return {"agents": [], "note": "Router needs to be properly configured"}
+    
+    @slot_selection_router.get("/slot-selection")
+    async def emergency_slot_selection():
+        return {"error": "Slot selection service not available"}
 
 # Try to import shared utilities with fallback
 try:
@@ -186,6 +192,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # Include routers - CRITICAL: This must happen AFTER app creation
 app.include_router(twilio_router)
 app.include_router(dashboard_router)
+app.include_router(slot_selection_router)
 
 logger.info("📍 Routers included successfully")
 

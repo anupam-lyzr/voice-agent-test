@@ -1,256 +1,164 @@
 """
-Client Data Models
-Pydantic models for client information and call history
+Client Database Model
+Handles client data storage and retrieval
 """
 
-from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from enum import Enum
-
-class CampaignStatus(str, Enum):
-    """Campaign status for each client"""
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    PAUSED = "paused"
-
-class CallOutcome(str, Enum):
-    """Possible outcomes for a call attempt"""
-    NO_ANSWER = "no_answer"
-    BUSY = "busy"
-    VOICEMAIL = "voicemail"
-    ANSWERED = "answered"
-    INTERESTED = "interested"
-    NOT_INTERESTED = "not_interested"
-    DNC_REQUESTED = "dnc_requested"
-    INVALID_NUMBER = "invalid_number"
-    FAILED = "failed"
-
-class CRMTag(str, Enum):
-    """CRM tags for client categorization"""
-    INTERESTED = "LYZR-UC1-INTERESTED"
-    NOT_INTERESTED = "LYZR-UC1-NOT-INTERESTED"
-    DNC_REQUESTED = "LYZR-UC1-DNC-REQUESTED"
-    NO_CONTACT = "LYZR-UC1-NO-CONTACT"
-    INVALID_NUMBER = "LYZR-UC1-INVALID-NUMBER"
-    INVALID_EMAIL = "LYZR-UC1-INVALID-EMAIL"
-
-class AudioType(str, Enum):
-    """Type of audio used in the call"""
-    STATIC = "static"        # Pre-generated audio
-    DYNAMIC = "dynamic"      # Real-time TTS
-    HYBRID = "hybrid"        # Mix of both
-
-class ClientInfo(BaseModel):
-    """Basic client information from CSV"""
-    first_name: str = Field(..., description="Client's first name")
-    last_name: str = Field(..., description="Client's last name")
-    phone: str = Field(..., description="Client's phone number")
-    email: str = Field(..., description="Client's email address")
-    last_agent: str = Field(..., description="ID of the last agent who handled this client")
-    
-    @property
-    def full_name(self) -> str:
-        """Get client's full name"""
-        return f"{self.first_name} {self.last_name}"
-    
-    def model_dump_for_greeting(self) -> dict:
-        """Get data formatted for greeting personalization"""
-        return {
-            "client_name": self.full_name,
-            "first_name": self.first_name,
-            "last_agent": self.last_agent
-        }
-
-class CallAttempt(BaseModel):
-    """Individual call attempt record"""
-    attempt_number: int = Field(..., description="Attempt number (1-6)")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the attempt was made")
-    outcome: CallOutcome = Field(..., description="Result of the call attempt")
-    duration_seconds: Optional[int] = Field(None, description="Call duration in seconds")
-    twilio_call_sid: Optional[str] = Field(None, description="Twilio call SID")
-    
-    # Audio and conversation details
-    audio_type: Optional[AudioType] = Field(None, description="Type of audio used")
-    transcript: Optional[str] = Field(None, description="Full conversation transcript")
-    agent_responses: List[str] = Field(default_factory=list, description="Agent responses during call")
-    
-    # Technical details
-    error_message: Optional[str] = Field(None, description="Error message if call failed")
-    response_times: Dict[str, float] = Field(default_factory=dict, description="Performance metrics")
-    
-    # Conversation analysis
-    conversation_turns: int = Field(default=0, description="Number of conversation turns")
-    static_responses_used: int = Field(default=0, description="Number of pre-generated responses used")
-    dynamic_responses_used: int = Field(default=0, description="Number of real-time responses used")
-
-class CallSummary(BaseModel):
-    """LYZR-generated call summary"""
-    summary_id: str = Field(..., description="Unique summary ID")
-    generated_at: datetime = Field(default_factory=datetime.utcnow, description="When summary was generated")
-    
-    # Core summary data
-    outcome: CallOutcome = Field(..., description="Call outcome")
-    sentiment: str = Field(..., description="Customer sentiment (positive/neutral/negative)")
-    key_points: List[str] = Field(default_factory=list, description="Key conversation points")
-    customer_concerns: List[str] = Field(default_factory=list, description="Customer concerns mentioned")
-    
-    # Actionable insights
-    recommended_actions: List[str] = Field(default_factory=list, description="Recommended next actions")
-    agent_notes: str = Field(default="", description="Notes for assigned agent")
-    urgency: str = Field(default="medium", description="Urgency level (high/medium/low)")
-    follow_up_timeframe: str = Field(default="within_week", description="Recommended follow-up timing")
-    
-    # Interest analysis
-    interest_level: str = Field(default="unknown", description="Customer interest level")
-    services_mentioned: List[str] = Field(default_factory=list, description="Insurance services discussed")
-    objections_raised: List[str] = Field(default_factory=list, description="Customer objections")
-    
-    # Quality metrics
-    conversation_quality: str = Field(default="good", description="Overall conversation quality")
-    agent_performance: str = Field(default="good", description="AI agent performance assessment")
-
-class AgentAssignment(BaseModel):
-    """Agent assignment details"""
-    agent_id: str = Field(..., description="Assigned agent ID")
-    assigned_at: datetime = Field(default_factory=datetime.utcnow, description="When agent was assigned")
-    assignment_reason: str = Field(default="interested", description="Reason for assignment")
-    
-    # Meeting scheduling
-    meeting_scheduled: Optional[datetime] = Field(None, description="Scheduled meeting time")
-    meeting_status: str = Field(default="pending", description="Meeting status")
-    calendar_event_id: Optional[str] = Field(None, description="Google Calendar event ID")
-    
-    # Communication history
-    emails_sent: List[str] = Field(default_factory=list, description="Emails sent to client/agent")
-    last_contact_attempt: Optional[datetime] = Field(None, description="Last contact attempt")
+from pydantic import BaseModel, Field, validator
+from bson import ObjectId
 
 class Client(BaseModel):
-    """Complete client record with call history"""
-    # MongoDB document ID
-    id: Optional[str] = Field(None, alias="_id", description="MongoDB document ID")
+    """Client database model"""
     
-    # Core client information
-    client: ClientInfo = Field(..., description="Basic client information")
+    id: Optional[str] = Field(default=None, alias="_id")
+    client_id: str = Field(..., description="Unique client identifier")
+    full_name: str = Field(..., description="Client full name")
+    first_name: Optional[str] = Field(None, description="Client first name")
+    last_name: Optional[str] = Field(None, description="Client last name")
+    email: Optional[str] = Field(None, description="Client email address")
+    phone_number: str = Field(..., description="Client phone number")
     
-    # Campaign tracking
-    campaign_status: CampaignStatus = Field(default=CampaignStatus.PENDING, description="Current campaign status")
-    total_attempts: int = Field(default=0, description="Total number of call attempts")
-    
-    # Call history
-    call_history: List[CallAttempt] = Field(default_factory=list, description="All call attempts")
-    
-    # Current call summary (latest)
-    current_summary: Optional[CallSummary] = Field(None, description="Most recent call summary")
-    
-    # CRM integration
-    crm_tags: List[CRMTag] = Field(default_factory=list, description="Applied CRM tags")
-    capsule_person_id: Optional[str] = Field(None, description="Capsule CRM person ID")
+    # Address information
+    address: Optional[str] = Field(None, description="Client address")
+    city: Optional[str] = Field(None, description="Client city")
+    state: Optional[str] = Field(None, description="Client state")
+    zip_code: Optional[str] = Field(None, description="Client zip code")
     
     # Agent assignment
-    agent_assignment: Optional[AgentAssignment] = Field(None, description="Current agent assignment")
+    assigned_agent_id: Optional[str] = Field(None, description="Assigned agent ID")
+    assigned_agent_name: Optional[str] = Field(None, description="Assigned agent name")
+    assigned_agent_tag: Optional[str] = Field(None, description="Agent tag identifier from Excel")
+    assignment_date: Optional[datetime] = Field(None, description="Date when agent was assigned")
     
-    # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="When record was created")
-    updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update time")
-    last_contact_attempt: Optional[datetime] = Field(None, description="Last contact attempt")
+    # Call status
+    call_status: str = Field(default="pending", description="Call status: pending, called, interested, not_interested, scheduled")
+    last_call_date: Optional[datetime] = Field(None, description="Date of last call attempt")
+    call_attempts: int = Field(default=0, description="Number of call attempts")
+    max_call_attempts: int = Field(default=3, description="Maximum call attempts allowed")
+    
+    # Call outcomes
+    call_outcome: Optional[str] = Field(None, description="Outcome of last call")
+    call_notes: Optional[str] = Field(None, description="Notes from call")
+    call_summary: Optional[Dict[str, Any]] = Field(None, description="Detailed call summary")
+    
+    # Scheduling
+    meeting_scheduled: bool = Field(default=False, description="Whether meeting is scheduled")
+    meeting_date: Optional[datetime] = Field(None, description="Scheduled meeting date")
+    meeting_confirmed: bool = Field(default=False, description="Whether meeting is confirmed")
+    
+    # DNC (Do Not Call)
+    dnc_requested: bool = Field(default=False, description="Whether client requested DNC")
+    dnc_date: Optional[datetime] = Field(None, description="Date when DNC was requested")
+    
+    # Excel data fields
+    excel_row_id: Optional[int] = Field(None, description="Row ID from Excel file")
+    source_file: Optional[str] = Field(None, description="Source Excel file name")
+    import_date: Optional[datetime] = Field(None, description="Date when imported from Excel")
+    
+    # Additional fields from Excel
+    policy_type: Optional[str] = Field(None, description="Type of insurance policy")
+    policy_number: Optional[str] = Field(None, description="Policy number")
+    premium_amount: Optional[float] = Field(None, description="Premium amount")
+    effective_date: Optional[datetime] = Field(None, description="Policy effective date")
+    expiration_date: Optional[datetime] = Field(None, description="Policy expiration date")
     
     # Metadata
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    is_active: bool = Field(default=True, description="Whether client is active")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
     
-    is_test_client: bool = Field(default=False, description="Whether this is a test client")
-    
-    def add_call_attempt(self, attempt: CallAttempt):
-        """Add a new call attempt to history"""
-        self.call_history.append(attempt)
-        self.total_attempts = len(self.call_history)
-        self.last_contact_attempt = attempt.timestamp
-        self.updated_at = datetime.utcnow()
-        
-        # Update campaign status based on outcome
-        if attempt.outcome in [CallOutcome.INTERESTED, CallOutcome.NOT_INTERESTED, CallOutcome.DNC_REQUESTED]:
-            self.campaign_status = CampaignStatus.COMPLETED
-        elif self.total_attempts >= 6:  # Max attempts reached
-            self.campaign_status = CampaignStatus.COMPLETED
-        else:
-            self.campaign_status = CampaignStatus.IN_PROGRESS
-    
-    def assign_agent(self, agent_id: str, meeting_time: Optional[datetime] = None):
-        """Assign client to an agent"""
-        self.agent_assignment = AgentAssignment(
-            agent_id=agent_id,
-            assignment_reason="interested" if self.is_interested() else "follow_up",
-            meeting_scheduled=meeting_time
-        )
-        self.updated_at = datetime.utcnow()
-    
-    def add_crm_tag(self, tag: CRMTag):
-        """Add CRM tag if not already present"""
-        if tag not in self.crm_tags:
-            self.crm_tags.append(tag)
-            self.updated_at = datetime.utcnow()
-    
-    def is_interested(self) -> bool:
-        """Check if client has shown interest"""
-        if self.call_history:
-            latest_attempt = self.call_history[-1]
-            return latest_attempt.outcome == CallOutcome.INTERESTED
-        return False
-    
-    def should_attempt_call(self) -> bool:
-        """Check if we should attempt another call"""
-        if self.campaign_status == CampaignStatus.COMPLETED:
-            return False
-        if self.total_attempts >= 6:  # Max attempts
-            return False
-        if CRMTag.DNC_REQUESTED in self.crm_tags:
-            return False
-        return True
-    
-    def get_latest_summary(self) -> Optional[CallSummary]:
-        """Get the most recent call summary"""
-        return self.current_summary
-    
-    def get_success_rate(self) -> float:
-        """Get success rate (answered calls / total attempts)"""
-        if not self.call_history:
-            return 0.0
-        
-        answered_calls = sum(1 for attempt in self.call_history 
-                           if attempt.outcome in [CallOutcome.ANSWERED, CallOutcome.INTERESTED, CallOutcome.NOT_INTERESTED])
-        return answered_calls / len(self.call_history)
+    @validator('phone_number')
+    def validate_phone_number(cls, v):
+        """Clean and validate phone number"""
+        if v:
+            # Remove all non-digit characters
+            cleaned = ''.join(filter(str.isdigit, str(v)))
+            if len(cleaned) == 10:
+                return f"({cleaned[:3]}) {cleaned[3:6]}-{cleaned[6:]}"
+            elif len(cleaned) == 11 and cleaned[0] == '1':
+                return f"({cleaned[1:4]}) {cleaned[4:7]}-{cleaned[7:]}"
+            else:
+                return v  # Return original if can't format
+        return v
     
     class Config:
-        populate_by_name = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
+        allow_population_by_field_name = True
+        schema_extra = {
+            "example": {
+                "client_id": "client_001",
+                "full_name": "John Doe",
+                "first_name": "John",
+                "last_name": "Doe",
+                "email": "john.doe@email.com",
+                "phone_number": "(555) 123-4567",
+                "address": "123 Main St",
+                "city": "Anytown",
+                "state": "CA",
+                "zip_code": "12345",
+                "assigned_agent_id": "anthony_fracchia",
+                "assigned_agent_name": "Anthony Fracchia",
+                "assigned_agent_tag": "AB - Anthony Fracchia",
+                "call_status": "pending",
+                "call_attempts": 0,
+                "is_active": True
+            }
         }
 
-class ClientSearchFilter(BaseModel):
-    """Filters for searching clients"""
-    campaign_status: Optional[CampaignStatus] = None
-    crm_tags: Optional[List[CRMTag]] = None
-    last_agent: Optional[str] = None
-    has_agent_assignment: Optional[bool] = None
-    min_attempts: Optional[int] = None
-    max_attempts: Optional[int] = None
-    created_after: Optional[datetime] = None
-    created_before: Optional[datetime] = None
+class ClientCreate(BaseModel):
+    """Model for creating new clients"""
+    client_id: str
+    full_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: str
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    assigned_agent_tag: Optional[str] = None
+    policy_type: Optional[str] = None
+    policy_number: Optional[str] = None
+    premium_amount: Optional[float] = None
+    effective_date: Optional[datetime] = None
+    expiration_date: Optional[datetime] = None
+    excel_row_id: Optional[int] = None
+    source_file: Optional[str] = None
 
-class ClientBatch(BaseModel):
-    """Batch of clients for processing"""
-    clients: List[Client] = Field(..., description="List of clients in batch")
-    batch_id: str = Field(..., description="Unique batch identifier")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Batch creation time")
-    total_count: int = Field(..., description="Total number of clients in batch")
-    processed_count: int = Field(default=0, description="Number of clients processed")
-    
-    def mark_processed(self, client_id: str):
-        """Mark a client as processed"""
-        self.processed_count += 1
-    
-    def is_complete(self) -> bool:
-        """Check if batch is complete"""
-        return self.processed_count >= self.total_count
+class ClientUpdate(BaseModel):
+    """Model for updating clients"""
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    assigned_agent_id: Optional[str] = None
+    assigned_agent_name: Optional[str] = None
+    assigned_agent_tag: Optional[str] = None
+    assignment_date: Optional[datetime] = None
+    call_status: Optional[str] = None
+    last_call_date: Optional[datetime] = None
+    call_attempts: Optional[int] = None
+    call_outcome: Optional[str] = None
+    call_notes: Optional[str] = None
+    call_summary: Optional[Dict[str, Any]] = None
+    meeting_scheduled: Optional[bool] = None
+    meeting_date: Optional[datetime] = None
+    meeting_confirmed: Optional[bool] = None
+    dnc_requested: Optional[bool] = None
+    dnc_date: Optional[datetime] = None
+    is_active: Optional[bool] = None
+
+class ClientAssignment(BaseModel):
+    """Model for assigning clients to agents"""
+    client_id: str
+    agent_id: str
+    agent_name: str
+    agent_tag: str
+    assignment_reason: Optional[str] = None
+    assigned_at: datetime = Field(default_factory=datetime.utcnow)

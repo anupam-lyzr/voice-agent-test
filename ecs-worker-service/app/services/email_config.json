@@ -1,0 +1,326 @@
+{
+    "email_scenarios": {
+        "no_answer": {
+            "enabled": true,
+            "description": "Client didn't pick up the call",
+            "template": "no_answer",
+            "recipient": "client",
+            "subject": "We tried to reach you 📞",
+            "trigger": "Call status: no-answer, busy, failed"
+        },
+        "voicemail": {
+            "enabled": true,
+            "description": "Call went to voicemail",
+            "template": "voicemail",
+            "recipient": "client",
+            "subject": "We left you a message 📱",
+            "trigger": "Call status: voicemail"
+        },
+        "interested_no_schedule": {
+            "enabled": true,
+            "description": "Client interested but didn't schedule",
+            "template": "interested_no_schedule",
+            "recipient": "client",
+            "subject": "Thank you for your time!",
+            "trigger": "Outcome: interested, no meeting scheduled"
+        },
+        "reengagement": {
+            "enabled": true,
+            "description": "Initial re-engagement email when phone call fails",
+            "template": "reengagement",
+            "recipient": "client",
+            "subject": "Re-engagement from Altruis Advisor Group",
+            "trigger": "Phone call failed, sending email follow-up"
+        },
+        "reengagement_yes": {
+            "enabled": true,
+            "description": "Client responded 'Yes' to re-engagement email",
+            "template": "reengagement_yes",
+            "recipient": "client",
+            "subject": "Thank you for your response!",
+            "trigger": "Email response: Yes"
+        },
+        "reengagement_no": {
+            "enabled": true,
+            "description": "Client responded 'No' to re-engagement email",
+            "template": "reengagement_no",
+            "recipient": "client",
+            "subject": "Thank you for your response!",
+            "trigger": "Email response: No"
+        },
+        "reengagement_remove": {
+            "enabled": true,
+            "description": "Client responded 'Remove' to re-engagement email",
+            "template": "reengagement_remove",
+            "recipient": "client",
+            "subject": "Your request has been processed",
+            "trigger": "Email response: Remove"
+        },
+        "interested_and_scheduled": {
+            "enabled": true,
+            "description": "Client interested and scheduled meeting",
+            "template": "interested_and_scheduled",
+            "recipient": "client",
+            "subject": "Meeting Scheduled - Discovery Call 📅",
+            "trigger": "Outcome: interested, meeting scheduled"
+        },
+        "not_interested_no_dnc": {
+            "enabled": true,
+            "description": "Client not interested but not DNC",
+            "template": "not_interested_no_dnc",
+            "recipient": "client",
+            "subject": "Thank you for your time 🙏",
+            "trigger": "Outcome: not_interested, dnc: false"
+        },
+        "not_interested_with_dnc": {
+            "enabled": true,
+            "description": "Client not interested and requested DNC",
+            "template": "not_interested_with_dnc",
+            "recipient": "client",
+            "subject": "Your request has been processed ✅",
+            "trigger": "Outcome: not_interested, dnc: true"
+        },
+        "interested_but_dnc": {
+            "enabled": false,
+            "description": "Client interested but also requested DNC (conflicting)",
+            "template": "interested_but_dnc",
+            "recipient": "client",
+            "subject": "Thank you for your interest! 🎉",
+            "trigger": "Outcome: interested, dnc: true"
+        },
+        "unclear_response": {
+            "enabled": true,
+            "description": "Client response was unclear or ambiguous",
+            "template": "unclear_response",
+            "recipient": "client",
+            "subject": "Follow-up on our conversation 📞",
+            "trigger": "Outcome: unclear, maybe, no clear response"
+        },
+        "busy_call_back": {
+            "enabled": true,
+            "description": "Client was busy, asked to call back",
+            "template": "busy_call_back",
+            "recipient": "client",
+            "subject": "We'll call you back as requested 📞",
+            "trigger": "Outcome: busy, call_back_requested"
+        },
+        "slot_selection": {
+            "enabled": true,
+            "description": "Send available time slots to interested client",
+            "template": "slot_selection",
+            "recipient": "client",
+            "subject": "Choose Your Preferred Time Slot 📅",
+            "trigger": "Outcome: interested, ready_to_schedule"
+        },
+        "slot_confirmation": {
+            "enabled": true,
+            "description": "Confirm client's slot selection",
+            "template": "slot_confirmation",
+            "recipient": "client",
+            "subject": "Meeting Confirmed - {meeting_time} ✅",
+            "trigger": "Slot selected by client"
+        },
+        "meeting_reminder": {
+            "enabled": true,
+            "description": "24-hour reminder before meeting",
+            "template": "meeting_reminder",
+            "recipient": "client",
+            "subject": "Reminder: Your Discovery Call Tomorrow 📅",
+            "trigger": "24 hours before scheduled meeting"
+        },
+        "meeting_reminder_agent": {
+            "enabled": true,
+            "description": "24-hour reminder to agent",
+            "template": "meeting_reminder_agent",
+            "recipient": "agent",
+            "subject": "Reminder: Discovery Call Tomorrow - {client_name} 📅",
+            "trigger": "24 hours before scheduled meeting"
+        },
+        "reschedule_info": {
+            "enabled": true,
+            "description": "Provide rescheduling contact information",
+            "template": "reschedule_info",
+            "recipient": "client",
+            "subject": "Need to Reschedule? Here's How 📞",
+            "trigger": "Client requests reschedule"
+        },
+        "agent_assignment": {
+            "enabled": true,
+            "description": "Notify agent of new client assignment",
+            "template": "agent_assignment",
+            "recipient": "agent",
+            "subject": "New Client Assignment - {client_name} 👨‍💼",
+            "trigger": "New client assigned to agent"
+        },
+        "meeting_confirmation": {
+            "enabled": true,
+            "description": "Confirm meeting creation in calendar",
+            "template": "meeting_confirmation",
+            "recipient": "client",
+            "subject": "Meeting Confirmation - {meeting_time} 📅",
+            "trigger": "Calendar event created"
+        }
+    },
+    "email_templates": {
+        "no_answer": {
+            "html_template": "no_answer_email_html",
+            "text_template": "no_answer_email_text"
+        },
+        "voicemail": {
+            "html_template": "voicemail_email_html",
+            "text_template": "voicemail_email_text"
+        },
+        "interested_no_schedule": {
+            "html_template": "interested_no_schedule_email_html",
+            "text_template": "interested_no_schedule_email_text"
+        },
+        "reengagement": {
+            "html_template": "reengagement_email_html",
+            "text_template": "reengagement_email_text"
+        },
+        "reengagement_yes": {
+            "html_template": "reengagement_yes_response_html",
+            "text_template": "reengagement_yes_response_text"
+        },
+        "reengagement_no": {
+            "html_template": "reengagement_no_response_html",
+            "text_template": "reengagement_no_response_text"
+        },
+        "reengagement_remove": {
+            "html_template": "reengagement_remove_response_html",
+            "text_template": "reengagement_remove_response_text"
+        },
+        "interested_and_scheduled": {
+            "html_template": "interested_and_scheduled_email_html",
+            "text_template": "interested_and_scheduled_email_text"
+        },
+        "not_interested_no_dnc": {
+            "html_template": "not_interested_no_dnc_email_html",
+            "text_template": "not_interested_no_dnc_email_text"
+        },
+        "not_interested_with_dnc": {
+            "html_template": "not_interested_with_dnc_email_html",
+            "text_template": "not_interested_with_dnc_email_text"
+        },
+        "interested_but_dnc": {
+            "html_template": "interested_but_dnc_email_html",
+            "text_template": "interested_but_dnc_email_text"
+        },
+        "unclear_response": {
+            "html_template": "unclear_response_email_html",
+            "text_template": "unclear_response_email_text"
+        },
+        "busy_call_back": {
+            "html_template": "busy_call_back_email_html",
+            "text_template": "busy_call_back_email_text"
+        },
+        "slot_selection": {
+            "html_template": "slot_selection_email_html",
+            "text_template": "slot_selection_email_text"
+        },
+        "slot_confirmation": {
+            "html_template": "slot_confirmation_email_html",
+            "text_template": "slot_confirmation_email_text"
+        },
+        "meeting_reminder": {
+            "html_template": "meeting_reminder_email_html",
+            "text_template": "meeting_reminder_email_text"
+        },
+        "meeting_reminder_agent": {
+            "html_template": "meeting_reminder_agent_email_html",
+            "text_template": "meeting_reminder_agent_email_text"
+        },
+        "reschedule_info": {
+            "html_template": "reschedule_info_email_html",
+            "text_template": "reschedule_info_email_text"
+        },
+        "agent_assignment": {
+            "html_template": "agent_assignment_email_html",
+            "text_template": "agent_assignment_email_text"
+        },
+        "meeting_confirmation": {
+            "html_template": "meeting_confirmation_email_html",
+            "text_template": "meeting_confirmation_email_text"
+        }
+    },
+    "scenario_mapping": {
+        "call_outcomes": {
+            "no_answer": [
+                "no_answer"
+            ],
+            "busy": [
+                "busy_call_back"
+            ],
+            "failed": [
+                "no_answer"
+            ],
+            "voicemail": [
+                "voicemail"
+            ],
+            "interested": [
+                "interested_no_schedule"
+            ],
+            "interested_scheduled": [
+                "interested_and_scheduled"
+            ],
+            "not_interested": [
+                "not_interested_no_dnc"
+            ],
+            "not_interested_dnc": [
+                "not_interested_with_dnc"
+            ],
+            "interested_dnc": [
+                "interested_but_dnc"
+            ],
+            "unclear": [
+                "unclear_response"
+            ],
+            "maybe": [
+                "unclear_response"
+            ],
+            "busy_call_back": [
+                "busy_call_back"
+            ],
+            "follow_up": [
+                "unclear_response"
+            ],
+            "phone_failed": [
+                "reengagement"
+            ]
+        },
+        "email_responses": {
+            "reengagement_yes": [
+                "reengagement_yes"
+            ],
+            "reengagement_no": [
+                "reengagement_no"
+            ],
+            "reengagement_remove": [
+                "reengagement_remove"
+            ]
+        },
+        "scheduling_stages": {
+            "slot_selection": [
+                "slot_selection"
+            ],
+            "slot_confirmed": [
+                "slot_confirmation"
+            ],
+            "meeting_reminder": [
+                "meeting_reminder",
+                "meeting_reminder_agent"
+            ],
+            "reschedule_requested": [
+                "reschedule_info"
+            ]
+        },
+        "agent_notifications": {
+            "new_assignment": [
+                "agent_assignment"
+            ],
+            "meeting_created": [
+                "meeting_confirmation"
+            ]
+        }
+    }
+}

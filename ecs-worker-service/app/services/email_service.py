@@ -26,6 +26,7 @@ except ImportError:
     SMTP_AVAILABLE = False
 
 from shared.config.settings import settings
+from .email_signature import email_signature
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,74 @@ class EmailService:
         """Check if email service is properly configured"""
         return self.ses_client is not None or self.smtp_config is not None
 
+    async def send_slot_selection_email(self, client_email: str, client_name: str, agent_name: str, available_slots: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Send slot selection email with available time slots"""
+        try:
+            if not self.is_configured():
+                logger.warning("⚠️ Email service not configured, logging slot selection email")
+                logger.info(f"📧 Slot selection email would be sent to {client_email}")
+                logger.info(f"📅 Available slots: {len(available_slots)}")
+                return {"success": True, "method": "logged"}
+            
+            # Get email templates
+            html_content = self._get_slot_selection_email_html(client_name, available_slots)
+            text_content = self._get_slot_selection_email_text(client_name, available_slots)
+            
+            # Send email
+            subject = f"Choose Your Preferred Time Slot - {agent_name}"
+            
+            result = await self._send_email(
+                to_email=client_email,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content
+            )
+            
+            if result.get("success"):
+                logger.info(f"✅ Slot selection email sent to {client_email}")
+                return {"success": True, "email_id": result.get("message_id")}
+            else:
+                logger.error(f"❌ Failed to send slot selection email: {result.get('error')}")
+                return {"success": False, "error": result.get("error")}
+                
+        except Exception as e:
+            logger.error(f"❌ Error sending slot selection email: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def send_meeting_confirmation_email(self, client_email: str, client_name: str, agent_name: str, meeting_details: Dict[str, Any]) -> Dict[str, Any]:
+        """Send meeting confirmation email"""
+        try:
+            if not self.is_configured():
+                logger.warning("⚠️ Email service not configured, logging meeting confirmation")
+                logger.info(f"📧 Meeting confirmation would be sent to {client_email}")
+                return {"success": True, "method": "logged"}
+            
+            # Get email templates
+            html_content = self._get_slot_confirmation_email_html(client_name, meeting_details)
+            text_content = self._get_slot_confirmation_email_text(client_name, meeting_details)
+            
+            # Send email
+            meeting_time = meeting_details.get('meeting_time', 'TBD')
+            subject = f"Meeting Confirmed - {meeting_time}"
+            
+            result = await self._send_email(
+                to_email=client_email,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content
+            )
+            
+            if result.get("success"):
+                logger.info(f"✅ Meeting confirmation email sent to {client_email}")
+                return {"success": True, "email_id": result.get("message_id")}
+            else:
+                logger.error(f"❌ Failed to send meeting confirmation: {result.get('error')}")
+                return {"success": False, "error": result.get("error")}
+                
+        except Exception as e:
+            logger.error(f"❌ Error sending meeting confirmation: {e}")
+            return {"success": False, "error": str(e)}
+
     async def send_conversation_stage_email(self, client_email: str, client_name: str, stage: str, call_summary: Dict[str, Any]) -> bool:
         """Send email based on conversation stage with proper timing"""
         try:
@@ -122,8 +191,8 @@ class EmailService:
                 },
                 "agent_assignment": {
                     "subject": "New Client Assignment - Action Required 👨‍💼",
-                    "html": self._get_agent_assignment_email_html(client_name, call_summary),
-                    "text": self._get_agent_assignment_email_text(client_name, call_summary)
+                    "html": self._get_agent_assignment_email_html("Agent", {"client_name": client_name}, call_summary),
+                    "text": self._get_agent_assignment_email_text("Agent", {"client_name": client_name}, call_summary)
                 }
             }
 
@@ -312,69 +381,46 @@ class EmailService:
         """
 
     def _get_email_footer(self) -> str:
-        """Get email footer HTML"""
+        """Get email footer HTML with configurable signature"""
+        signature_html = email_signature.get_html_signature()
+        
         return f"""
+            </div>
+            {signature_html}
+            <div class="footer" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; color: #666; font-size: 12px;">
+                <p>© 2024 Altruis Advisor Group. All rights reserved.</p>
+                <p>This email was sent from an automated system. Please do not reply directly to this email.</p>
             </div>
         </body>
         </html>
         """
 
     def _get_interested_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
-        """Get HTML for interested customer email"""
-        key_points = self._format_key_points_html(call_summary.get('key_points', []))
-        
+        """Get HTML for interested customer email - matches document format"""
         return f"""
-        {self._get_email_header("Thank you for your interest!")}
+        {self._get_email_header("Thank you for your time!")}
         <div class="header">
-            <h1>🎉 Thank you for your interest!</h1>
+            <h1>Thank you for your time!</h1>
         </div>
         <div class="content">
-            <h2>Dear {client_name},</h2>
+            <h2>Hello {client_name},</h2>
             
-            <p>We're thrilled that you're interested in our services! Your recent conversation with our AI assistant has shown great potential for collaboration.</p>
-            
-            <div class="highlight">
-                <h3>📋 Key Points from Our Conversation:</h3>
-                {key_points}
-            </div>
-            
-            <h3>🚀 What Happens Next:</h3>
-            <ul>
-                <li><strong>24-48 hours:</strong> Our team will review your requirements and prepare a customized proposal</li>
-                <li><strong>Calendar Invite:</strong> You'll receive available time slots for a detailed discovery call</li>
-                <li><strong>Personalized Solution:</strong> We'll create a tailored approach based on your specific needs</li>
-            </ul>
-            
-            <p>We're committed to providing you with the best possible service and look forward to working together!</p>
-            
-            <p style="text-align: center;">
-                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Contact Us</a>
-            </p>
+            <p>Thank you for your time today! As requested, we will continue to keep you up to date with the latest and greatest health insurance information. If you'd like to connect with one of our insurance experts at any time, please feel free to reach out. We are always here to help and our services are always free of charge.</p>
         </div>
         {self._get_email_footer()}
         """
 
     def _get_not_interested_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
-        """Get HTML for not interested customer email"""
+        """Get HTML for not interested customer email - matches document format"""
         return f"""
-        {self._get_email_header("Thank you for your time")}
+        {self._get_email_header("Your request has been processed")}
         <div class="header">
-            <h1>🙏 Thank you for your time</h1>
+            <h1>Your request has been processed</h1>
         </div>
         <div class="content">
-            <h2>Dear {client_name},</h2>
+            <h2>Hello {client_name},</h2>
             
-            <p>Thank you for taking the time to speak with us today. We truly appreciate your consideration of our services.</p>
-            
-            <p>We understand that our services may not be the right fit for you at this time, and we respect your decision completely.</p>
-            
-            <div class="highlight">
-                <p><strong>💡 Remember:</strong> If your circumstances change in the future, we'd be happy to hear from you. Our team is always here to help when you're ready.</p>
-            </div>
-            
-            <p>We've noted your preferences and will ensure that we respect your decision going forward.</p>
-            
-            <p>Wishing you all the best in your endeavors!</p>
+            <p>We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge.</p>
         </div>
         {self._get_email_footer()}
         """
@@ -457,6 +503,7 @@ class EmailService:
 
     def _get_agent_assignment_email_html(self, agent_name: str, client_info: Dict[str, Any], call_summary: Dict[str, Any]) -> str:
         """Get HTML for agent assignment email"""
+        logger.info(f"🔍 DEBUG: _get_agent_assignment_email_html called with agent_name={agent_name}, client_info={client_info}, call_summary={call_summary}")
         client_name = client_info.get('client_name', 'Unknown Client')
         key_points = self._format_key_points_html(call_summary.get('key_points', []))
         concerns = self._format_concerns_html(call_summary.get('customer_concerns', []))
@@ -553,42 +600,585 @@ class EmailService:
         {self._get_email_footer()}
         """
 
+    # NEW: Missing Email Templates for Complete Scheduling System
+    
+    def _get_no_answer_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for no answer email"""
+        return f"""
+        {self._get_email_header("We tried to reach you")}
+        <div class="header">
+            <h1>📞 We tried to reach you</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>We recently tried to reach you regarding your health insurance needs, but we weren't able to connect.</p>
+            
+            <p>We wanted to let you know that we're here to help with:</p>
+            <ul>
+                <li>Policy reviews and updates</li>
+                <li>Open enrollment guidance</li>
+                <li>Cost-saving opportunities</li>
+                <li>Coverage optimization</li>
+            </ul>
+            
+            <div class="highlight">
+                <p><strong>💡 No pressure:</strong> If you're interested in learning more, we'd be happy to schedule a convenient time to discuss your options.</p>
+            </div>
+            
+            <p style="text-align: center;">
+                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Schedule a Call</a>
+            </p>
+            
+            <p>If you prefer not to receive these communications, please let us know.</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_voicemail_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for voicemail email"""
+        return f"""
+        {self._get_email_header("We left you a message")}
+        <div class="header">
+            <h1>📱 We left you a message</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>We called you earlier and left a voicemail about your health insurance needs.</p>
+            
+            <p>In case you missed it, we're reaching out to help with:</p>
+            <ul>
+                <li>Reviewing your current coverage</li>
+                <li>Exploring cost-saving options</li>
+                <li>Open enrollment planning</li>
+                <li>Policy updates and changes</li>
+            </ul>
+            
+            <div class="highlight">
+                <p><strong>🎯 Our services are completely free</strong> and there's no obligation to make any changes.</p>
+            </div>
+            
+            <p style="text-align: center;">
+                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Get in Touch</a>
+            </p>
+            
+            <p>We look forward to hearing from you!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_interested_no_schedule_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for interested but no schedule email"""
+        key_points = self._format_key_points_html(call_summary.get('key_points', []))
+        
+        return f"""
+        {self._get_email_header("Thank you for your interest!")}
+        <div class="header">
+            <h1>🎉 Thank you for your interest!</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>We're thrilled that you're interested in our services! Your recent conversation with Alex has shown great potential for collaboration.</p>
+            
+            <div class="highlight">
+                <h3>📋 Key Points from Our Conversation:</h3>
+                {key_points}
+            </div>
+            
+            <h3>🚀 What Happens Next:</h3>
+            <ul>
+                <li><strong>24-48 hours:</strong> Our team will review your requirements and prepare a customized proposal</li>
+                <li><strong>Calendar Invite:</strong> You'll receive available time slots for a detailed discovery call</li>
+                <li><strong>Personalized Solution:</strong> We'll create a tailored approach based on your specific needs</li>
+            </ul>
+            
+            <p>We're committed to providing you with the best possible service and look forward to working together!</p>
+            
+            <p style="text-align: center;">
+                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Contact Us</a>
+            </p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_interested_and_scheduled_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for interested and scheduled email"""
+        meeting_time = call_summary.get('meeting_time', 'TBD')
+        agent_name = call_summary.get('agent_name', 'Our Team')
+        
+        return f"""
+        {self._get_email_header("Meeting Scheduled - Discovery Call")}
+        <div class="header">
+            <h1>📅 Meeting Scheduled - Discovery Call</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>Your discovery call has been scheduled successfully! We're excited to meet with you.</p>
+            
+            <div class="meeting-details">
+                <h3>📋 Meeting Details:</h3>
+                <ul>
+                    <li><strong>Date & Time:</strong> {meeting_time}</li>
+                    <li><strong>Duration:</strong> 30 minutes</li>
+                    <li><strong>Format:</strong> Video call (link will be sent separately)</li>
+                    <li><strong>Agent:</strong> {agent_name}</li>
+                </ul>
+            </div>
+            
+            <h3>🎯 What to expect:</h3>
+            <ul>
+                <li>Detailed discussion of your needs and requirements</li>
+                <li>Custom solution recommendations</li>
+                <li>Q&A session</li>
+                <li>Next steps planning</li>
+            </ul>
+            
+            <div class="highlight">
+                <p><strong>💡 Need to reschedule?</strong> Please let us know at least 24 hours in advance, and we'll be happy to accommodate you.</p>
+            </div>
+            
+            <p>We look forward to our conversation!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_not_interested_no_dnc_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for not interested but no DNC email"""
+        return f"""
+        {self._get_email_header("Thank you for your time")}
+        <div class="header">
+            <h1>🙏 Thank you for your time</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>Thank you for taking the time to speak with us today. We truly appreciate your consideration of our services.</p>
+            
+            <p>We understand that our services may not be the right fit for you at this time, and we respect your decision completely.</p>
+            
+            <div class="highlight">
+                <p><strong>💡 Remember:</strong> If your circumstances change in the future, we'd be happy to hear from you. Our team is always here to help when you're ready.</p>
+            </div>
+            
+            <p>We've noted your preferences and will ensure that we respect your decision going forward.</p>
+            
+            <p>Wishing you all the best in your endeavors!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_not_interested_with_dnc_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for not interested with DNC email"""
+        return f"""
+        {self._get_email_header("Your request has been processed")}
+        <div class="header">
+            <h1>✅ Your request has been processed</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>Thank you for your time today. We have processed your request to be removed from our calling list.</p>
+            
+            <div class="highlight">
+                <p><strong>✅ Confirmation:</strong> You have been successfully added to our Do Not Call list. We will no longer contact you via phone.</p>
+            </div>
+            
+            <p>We respect your decision and appreciate you letting us know your preference.</p>
+            
+            <p>If you change your mind in the future and would like to hear from us again, you can always reach out to us directly.</p>
+            
+            <p>Thank you for your understanding.</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_interested_but_dnc_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for interested but DNC email (conflicting scenario)"""
+        return f"""
+        {self._get_email_header("Thank you for your interest!")}
+        <div class="header">
+            <h1>🎉 Thank you for your interest!</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>We're thrilled that you're interested in our services! However, we also noted that you requested to be removed from our calling list.</p>
+            
+            <div class="highlight">
+                <p><strong>📧 Email Communication:</strong> Since you expressed interest, we'll send you important updates via email only. You won't receive any phone calls from us.</p>
+            </div>
+            
+            <p>If you'd like to proceed with our services, please contact us via email and we'll be happy to help!</p>
+            
+            <p style="text-align: center;">
+                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Contact Us</a>
+            </p>
+            
+            <p>Thank you for your interest!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_unclear_response_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for unclear response email"""
+        key_points = self._format_key_points_html(call_summary.get('key_points', []))
+        
+        return f"""
+        {self._get_email_header("Follow-up on our conversation")}
+        <div class="header">
+            <h1>📞 Follow-up on our conversation</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>Thank you for our recent conversation. We wanted to follow up on the points we discussed and ensure we addressed all your questions.</p>
+            
+            <div class="key-points">
+                <h3>💬 Key Discussion Points:</h3>
+                {key_points}
+            </div>
+            
+            <p>We're here to help address any additional questions you may have. Please feel free to reach out if you'd like to discuss anything further.</p>
+            
+            <p style="text-align: center;">
+                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Get in Touch</a>
+            </p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_busy_call_back_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for busy call back email"""
+        return f"""
+        {self._get_email_header("We'll call you back as requested")}
+        <div class="header">
+            <h1>📞 We'll call you back as requested</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>We understand you were busy when we called. As requested, we'll try to reach you again at a more convenient time.</p>
+            
+            <p>In the meantime, here's what we wanted to discuss:</p>
+            <ul>
+                <li>Reviewing your current health insurance coverage</li>
+                <li>Exploring potential cost-saving opportunities</li>
+                <li>Open enrollment planning and guidance</li>
+                <li>Policy updates and changes</li>
+            </ul>
+            
+            <div class="highlight">
+                <p><strong>💡 No pressure:</strong> Our services are completely free and there's no obligation to make any changes.</p>
+            </div>
+            
+            <p>If you'd prefer to schedule a specific time that works for you, please let us know!</p>
+            
+            <p style="text-align: center;">
+                <a href="mailto:contact@altruisadvisor.com" class="button">📧 Schedule a Call</a>
+            </p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_slot_selection_email_html(self, client_name: str, available_slots: List[Dict[str, Any]]) -> str:
+        """Get HTML for slot selection email"""
+        slots_html = ""
+        for i, slot in enumerate(available_slots, 1):
+            slot_time = slot.get('time', 'TBD')
+            slot_date = slot.get('date', 'TBD')
+            slot_link = slot.get('link', '#')
+            slots_html += f"""
+                <div class="slot-option">
+                    <h4>Option {i}: {slot_date} at {slot_time}</h4>
+                    <a href="{slot_link}" class="button">📅 Select This Time</a>
+                </div>
+            """
+        
+        return f"""
+        {self._get_email_header("Choose Your Preferred Time Slot")}
+        <div class="header">
+            <h1>📅 Choose Your Preferred Time Slot</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>Great news! We have several available time slots for your discovery call. Please select the one that works best for you.</p>
+            
+            <div class="slot-selection">
+                <h3>🕐 Available Time Slots:</h3>
+                {slots_html}
+            </div>
+            
+            <div class="highlight">
+                <p><strong>💡 What to expect:</strong> Your discovery call will be 30 minutes long and will cover your specific needs and requirements.</p>
+            </div>
+            
+            <p>If none of these times work for you, please reply to this email and we'll find a time that does!</p>
+            
+            <p>We look forward to meeting with you!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_slot_confirmation_email_html(self, client_name: str, meeting_details: Dict[str, Any]) -> str:
+        """Get HTML for slot confirmation email"""
+        meeting_time = meeting_details.get('meeting_time', 'TBD')
+        agent_name = meeting_details.get('agent_name', 'Our Team')
+        calendar_link = meeting_details.get('calendar_link', 'Will be sent separately')
+        meet_link = meeting_details.get('meet_link', 'Will be sent separately')
+        
+        return f"""
+        {self._get_email_header("Meeting Confirmed")}
+        <div class="header">
+            <h1>✅ Meeting Confirmed</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>Perfect! Your discovery call has been confirmed for <strong>{meeting_time}</strong>.</p>
+            
+            <div class="meeting-details">
+                <h3>📋 Meeting Details:</h3>
+                <ul>
+                    <li><strong>Date & Time:</strong> {meeting_time}</li>
+                    <li><strong>Duration:</strong> 30 minutes</li>
+                    <li><strong>Agent:</strong> {agent_name}</li>
+                    <li><strong>Format:</strong> Video call</li>
+                </ul>
+            </div>
+            
+            <div class="highlight">
+                <p><strong>📅 Calendar Link:</strong> <a href="{calendar_link}">Add to Calendar</a></p>
+                <p><strong>🎥 Video Link:</strong> <a href="{meet_link}">Join Meeting</a></p>
+            </div>
+            
+            <h3>🎯 What to expect:</h3>
+            <ul>
+                <li>Detailed discussion of your needs and requirements</li>
+                <li>Custom solution recommendations</li>
+                <li>Q&A session</li>
+                <li>Next steps planning</li>
+            </ul>
+            
+            <p>We look forward to our conversation!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_meeting_reminder_email_html(self, client_name: str, meeting_details: Dict[str, Any]) -> str:
+        """Get HTML for meeting reminder email"""
+        meeting_time = meeting_details.get('meeting_time', 'TBD')
+        agent_name = meeting_details.get('agent_name', 'Our Team')
+        meet_link = meeting_details.get('meet_link', 'Will be sent separately')
+        
+        return f"""
+        {self._get_email_header("Reminder: Your Discovery Call Tomorrow")}
+        <div class="header">
+            <h1>📅 Reminder: Your Discovery Call Tomorrow</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>This is a friendly reminder that you have a discovery call scheduled for tomorrow at <strong>{meeting_time}</strong>.</p>
+            
+            <div class="meeting-details">
+                <h3>📋 Meeting Details:</h3>
+                <ul>
+                    <li><strong>Date & Time:</strong> {meeting_time}</li>
+                    <li><strong>Duration:</strong> 30 minutes</li>
+                    <li><strong>Agent:</strong> {agent_name}</li>
+                    <li><strong>Format:</strong> Video call</li>
+                </ul>
+            </div>
+            
+            <div class="highlight">
+                <p><strong>🎥 Video Link:</strong> <a href="{meet_link}">Join Meeting</a></p>
+            </div>
+            
+            <p>Please make sure you have a stable internet connection and are in a quiet environment for our call.</p>
+            
+            <p>If you need to reschedule, please contact us as soon as possible.</p>
+            
+            <p>We look forward to meeting with you!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_meeting_reminder_agent_email_html(self, agent_name: str, client_info: Dict[str, Any], meeting_details: Dict[str, Any]) -> str:
+        """Get HTML for meeting reminder email to agent"""
+        client_name = client_info.get('client_name', 'Unknown Client')
+        meeting_time = meeting_details.get('meeting_time', 'TBD')
+        meet_link = meeting_details.get('meet_link', 'Will be sent separately')
+        
+        return f"""
+        {self._get_email_header("Reminder: Discovery Call Tomorrow")}
+        <div class="header">
+            <h1>📅 Reminder: Discovery Call Tomorrow</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {agent_name},</h2>
+            
+            <p>This is a reminder that you have a discovery call scheduled for tomorrow at <strong>{meeting_time}</strong>.</p>
+            
+            <div class="meeting-details">
+                <h3>👤 Client Information:</h3>
+                <ul>
+                    <li><strong>Name:</strong> {client_name}</li>
+                    <li><strong>Phone:</strong> {client_info.get('phone', 'N/A')}</li>
+                    <li><strong>Email:</strong> {client_info.get('email', 'N/A')}</li>
+                </ul>
+            </div>
+            
+            <div class="meeting-details">
+                <h3>📋 Meeting Details:</h3>
+                <ul>
+                    <li><strong>Date & Time:</strong> {meeting_time}</li>
+                    <li><strong>Duration:</strong> 30 minutes</li>
+                    <li><strong>Format:</strong> Video call</li>
+                </ul>
+            </div>
+            
+            <div class="highlight">
+                <p><strong>🎥 Video Link:</strong> <a href="{meet_link}">Join Meeting</a></p>
+            </div>
+            
+            <p>Please review the client's information and prepare for the call.</p>
+            
+            <p>Good luck with the meeting!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_reschedule_info_email_html(self, client_name: str, meeting_details: Dict[str, Any]) -> str:
+        """Get HTML for reschedule information email"""
+        meeting_time = meeting_details.get('meeting_time', 'TBD')
+        
+        return f"""
+        {self._get_email_header("Need to Reschedule? Here's How")}
+        <div class="header">
+            <h1>📞 Need to Reschedule? Here's How</h1>
+        </div>
+        <div class="content">
+            <h2>Dear {client_name},</h2>
+            
+            <p>We understand that sometimes schedules change. If you need to reschedule your discovery call scheduled for <strong>{meeting_time}</strong>, here's how to do it:</p>
+            
+            <div class="reschedule-options">
+                <h3>📧 Email Us:</h3>
+                <p>Send an email to <a href="mailto:contact@altruisadvisor.com">contact@altruisadvisor.com</a> with your preferred new time.</p>
+                
+                <h3>📞 Call Us:</h3>
+                <p>Call us at <strong>833.227.8500</strong> and we'll help you find a new time that works.</p>
+                
+                <h3>⏰ Response Time:</h3>
+                <p>We'll respond within 24 hours to confirm your new appointment time.</p>
+            </div>
+            
+            <div class="highlight">
+                <p><strong>💡 Please note:</strong> We request at least 24 hours notice for rescheduling to help us accommodate other clients.</p>
+            </div>
+            
+            <p>Thank you for your understanding!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    # NEW: Email templates that match the document exactly
+    
+    def _get_reengagement_email_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for re-engagement email - matches document format"""
+        return f"""
+        {self._get_email_header("Re-engagement from Altruis Advisor Group")}
+        <div class="header">
+            <h1>Re-engagement from Altruis Advisor Group</h1>
+        </div>
+        <div class="content">
+            <h2>Hello {client_name},</h2>
+            
+            <p>Alex here from Altruis Advisor Group (on behalf of our CEO Anthony Fracchia), I just tried contacting you by phone. We've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? As a friendly reminder, our services are provided free of charge 😊.</p>
+            
+            <div class="response-options">
+                <p><strong>Reply "Yes"</strong> and one of our insurance experts will reach out to schedule a discovery call to get reacquainted with your specific situation.</p>
+                <p><strong>Reply "No"</strong> and our team will not contact you unless you reach out in the future.</p>
+                <p><strong>Reply "Remove"</strong> and we will remove you from all future correspondence</p>
+            </div>
+            
+            <p>We look forward to hearing back from you</p>
+            <p>Have a wonderful day!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_reengagement_yes_response_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for re-engagement 'Yes' response - matches document format"""
+        return f"""
+        {self._get_email_header("Thank you for your response!")}
+        <div class="header">
+            <h1>Thank you for your response!</h1>
+        </div>
+        <div class="content">
+            <h2>{client_name},</h2>
+            
+            <p>Thank you for the quick response😊! One of our insurance experts will be contacting you shortly to schedule a 15 discovery call to get reacquainted with your health insurance situation and determine the next steps.</p>
+            
+            <p>We are looking forward to assisting you!</p>
+            <p>Have a wonderful day!</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_reengagement_no_response_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for re-engagement 'No' response - matches document format"""
+        return f"""
+        {self._get_email_header("Thank you for your response!")}
+        <div class="header">
+            <h1>Thank you for your response!</h1>
+        </div>
+        <div class="content">
+            <h2>{client_name},</h2>
+            
+            <p>Thank you for the quick response😊! We have designated your client file as "Do Not Contact". If we can be of service to you in the future please feel free to reach out – we are always here to help and our services are always free of charge:</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
+    def _get_reengagement_remove_response_html(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get HTML for re-engagement 'Remove' response - matches document format"""
+        return f"""
+        {self._get_email_header("Your request has been processed")}
+        <div class="header">
+            <h1>Your request has been processed</h1>
+        </div>
+        <div class="content">
+            <h2>Hello {client_name},</h2>
+            
+            <p>We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge.</p>
+        </div>
+        {self._get_email_footer()}
+        """
+
     # Text versions for email clients that don't support HTML
     def _get_interested_email_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
-        """Get text version for interested customer email"""
-        key_points = self._format_key_points_text(call_summary.get('key_points', []))
+        """Get text version for interested customer email - matches document format"""
+        signature_text = email_signature.get_text_signature()
         return f"""
-Dear {client_name},
+Hello {client_name},
 
-Thank you for your interest in our services! We're excited that you're interested in working with us.
-
-Based on our conversation, here are the key points we discussed:
-{key_points}
-
-What happens next:
-- Our team will review your requirements within 24-48 hours
-- You'll receive calendar invites for available time slots
-- We'll create a personalized solution based on your needs
-
-If you have any immediate questions, please don't hesitate to reach out.
-
-Best regards,
-The Altruis Team
+Thank you for your time today! As requested, we will continue to keep you up to date with the latest and greatest health insurance information. If you'd like to connect with one of our insurance experts at any time, please feel free to reach out. We are always here to help and our services are always free of charge.
+{signature_text}
         """.strip()
 
     def _get_not_interested_email_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
-        """Get text version for not interested customer email"""
+        """Get text version for not interested customer email - matches document format"""
+        signature_text = email_signature.get_text_signature()
         return f"""
-Dear {client_name},
+Hello {client_name},
 
-Thank you for taking the time to speak with us today. We appreciate your consideration.
-
-We understand that our services may not be the right fit for you at this time. If your circumstances change in the future, we'd be happy to hear from you.
-
-We've noted your preferences and will respect your decision.
-
-Best regards,
-The Altruis Team
+We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge.
+{signature_text}
         """.strip()
 
     def _get_follow_up_email_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
@@ -673,6 +1263,8 @@ The Altruis Team
         """Get text version for meeting confirmation email"""
         meeting_time = meeting_details.get('meeting_time', 'TBD')
         calendar_link = meeting_details.get('calendar_link', 'Will be sent separately')
+        signature_text = email_signature.get_text_signature(agent_name)
+        
         return f"""
 Dear {client_name},
 
@@ -693,10 +1285,59 @@ What to expect:
 - Next steps planning
 
 Please let us know if you need to reschedule or have any questions.
+{signature_text}
+        """.strip()
 
-Best regards,
-{agent_name}
-The Altruis Team
+    # NEW: Text versions for re-engagement emails that match the document
+    
+    def _get_reengagement_email_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get text version for re-engagement email - matches document format"""
+        signature_text = email_signature.get_text_signature()
+        return f"""
+Hello {client_name},
+
+Alex here from Altruis Advisor Group (on behalf of our CEO Anthony Fracchia), I just tried contacting you by phone. We've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? As a friendly reminder, our services are provided free of charge 😊.
+
+Reply "Yes" and one of our insurance experts will reach out to schedule a discovery call to get reacquainted with your specific situation.
+Reply "No" and our team will not contact you unless you reach out in the future.
+Reply "Remove" and we will remove you from all future correspondence
+
+We look forward to hearing back from you
+Have a wonderful day!
+{signature_text}
+        """.strip()
+
+    def _get_reengagement_yes_response_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get text version for re-engagement 'Yes' response - matches document format"""
+        signature_text = email_signature.get_text_signature()
+        return f"""
+{client_name},
+
+Thank you for the quick response😊! One of our insurance experts will be contacting you shortly to schedule a 15 discovery call to get reacquainted with your health insurance situation and determine the next steps.
+
+We are looking forward to assisting you!
+Have a wonderful day!
+{signature_text}
+        """.strip()
+
+    def _get_reengagement_no_response_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get text version for re-engagement 'No' response - matches document format"""
+        signature_text = email_signature.get_text_signature()
+        return f"""
+{client_name},
+
+Thank you for the quick response😊! We have designated your client file as "Do Not Contact". If we can be of service to you in the future please feel free to reach out – we are always here to help and our services are always free of charge:
+{signature_text}
+        """.strip()
+
+    def _get_reengagement_remove_response_text(self, client_name: str, call_summary: Dict[str, Any]) -> str:
+        """Get text version for re-engagement 'Remove' response - matches document format"""
+        signature_text = email_signature.get_text_signature()
+        return f"""
+Hello {client_name},
+
+We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge.
+{signature_text}
         """.strip()
 
     # Helper methods for formatting
