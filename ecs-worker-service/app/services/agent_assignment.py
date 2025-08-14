@@ -1,252 +1,103 @@
 """
 Agent Assignment Service
-Handles assignment of interested clients to human agents using database
+Handles assignment of interested clients to human agents
 """
 
 import asyncio
+import json
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
+from dataclasses import dataclass
+
+# Google Calendar integration
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    GOOGLE_AVAILABLE = True
+except ImportError:
+    GOOGLE_AVAILABLE = False
 
 from shared.config.settings import settings
-from shared.models.call_session import CallSession
 from shared.models.client import Client
-from shared.utils.agent_repository import agent_repo
-from shared.utils.client_repository import client_repo
+from shared.utils.database import client_repo
 
 logger = logging.getLogger(__name__)
 
-class AgentAssignmentService:
-    """Handles assignment of clients to human agents using database"""
+@dataclass
+class Agent:
+    """Agent data class"""
+    id: str
+    name: str
+    email: str
+    google_calendar_id: str
+    timezone: str
+    working_hours: str
+    specialties: List[str]
+    tag_identifier: str
+    client_count: int
+
+class AgentAssignment:
+    """Handles assignment of clients to human agents"""
     
     def __init__(self):
+        self.agents = self._load_agents()
         self.calendar_service = None
         
-        # Initialize Google Calendar service if available
-        try:
-            from .google_calendar_service import calendar_service
-            self.calendar_service = calendar_service
-            logger.info("✅ Google Calendar service initialized")
-        except Exception as e:
-            logger.warning(f"⚠️ Google Calendar not available: {e}")
+        # Initialize Google Calendar service
+        if GOOGLE_AVAILABLE and getattr(settings, 'google_service_account_file', ''):
+            try:
+                self._init_calendar_service()
+                logger.info("✅ Google Calendar service initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Google Calendar not available: {e}")
+        else:
+            logger.info("🔧 Google Calendar integration disabled - using mock scheduling")
     
-    async def assign_agent_to_client(self, session: CallSession) -> Dict[str, Any]:
-        """Assign an agent to a client based on session data"""
-        try:
-            # Get client from database
-            client = await self._get_client_from_session(session)
-            
-            if not client:
-                return {
-                    "success": False,
-                    "error": "client_not_found",
-                    "message": "Client not found in database"
-                }
-            
-            # Check if client already has an agent assigned
-            if client.assigned_agent_id:
-                agent = await agent_repo.get_agent_by_id(client.assigned_agent_id)
-                if agent:
-                    logger.info(f"✅ Client {client.full_name} already assigned to {agent.name}")
-                    return {
-                        "success": True,
-                        "agent": {
-                            "id": agent.agent_id,
-                            "name": agent.name,
-                            "email": agent.email,
-                            "tag_identifier": agent.tag_identifier
-                        },
-                        "assignment_type": "existing"
-                    }
-            
-            # Find best agent for client
-            best_agent = await self._find_best_agent(client)
-            
-            if not best_agent:
-                return {
-                    "success": False,
-                    "error": "no_available_agent",
-                    "message": "No available agent found"
-                }
-            
-            # Assign agent to client
-            assignment_success = await self._assign_agent_to_client(client, best_agent)
-            
-            if not assignment_success:
-                return {
-                    "success": False,
-                    "error": "assignment_failed",
-                    "message": "Failed to assign agent to client"
-                }
-            
-            logger.info(f"✅ Assigned {client.full_name} to {best_agent.name}")
-            
-            return {
-                "success": True,
-                "agent": {
-                    "id": best_agent.agent_id,
-                    "name": best_agent.name,
-                    "email": best_agent.email,
-                    "tag_identifier": best_agent.tag_identifier
-                },
-                "assignment_type": "new"
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error assigning agent: {e}")
-            return {
-                "success": False,
-                "error": "assignment_error",
-                "message": str(e)
-            }
-    
-    async def _get_client_from_session(self, session: CallSession) -> Optional[Client]:
-        """Get client from database based on session data"""
-        try:
-            # Try to find client by phone number first
-            if session.phone_number:
-                client = await client_repo.get_client_by_phone(session.phone_number)
-                if client:
-                    return client
-            
-            # Try to find by email if available
-            if session.client_data and session.client_data.get("email"):
-                client = await client_repo.get_client_by_email(session.client_data["email"])
-                if client:
-                    return client
-            
-            # Try to find by name if available
-            if session.client_data and session.client_data.get("client_name"):
-                # Search by name
-                clients = await client_repo.search_clients(session.client_data["client_name"], limit=1)
-                if clients:
-                    return clients[0]
-            
-            logger.warning(f"⚠️ Client not found for session {session.session_id}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting client from session: {e}")
-            return None
-    
-    async def _find_best_agent(self, client: Client) -> Optional[Any]:
-        """Find the best agent for a client"""
-        try:
-            # If client has a specific agent tag, try to find that agent
-            if client.assigned_agent_tag:
-                agent = await agent_repo.get_agent_by_tag(client.assigned_agent_tag)
-                if agent and agent.is_active:
-                    logger.info(f"🎯 Found specific agent for client: {agent.name}")
-                    return agent
-            
-            # Get agents with lowest client count (load balancing)
-            agents = await agent_repo.get_agents_with_lowest_client_count(limit=5)
-            
-            if not agents:
-                logger.warning("⚠️ No active agents found")
-                return None
-            
-            # For now, return the first available agent
-            # In the future, you could implement more sophisticated selection logic
-            best_agent = agents[0]
-            logger.info(f"🎯 Selected agent for load balancing: {best_agent.name}")
-            return best_agent
-            
-        except Exception as e:
-            logger.error(f"❌ Error finding best agent: {e}")
-            return None
-    
-    async def _assign_agent_to_client(self, client: Client, agent: Any) -> bool:
-        """Assign agent to client in database"""
-        try:
-            from shared.models.client import ClientAssignment
-            
-            # Create assignment
-            assignment = ClientAssignment(
-                client_id=client.client_id,
-                agent_id=agent.agent_id,
-                agent_name=agent.name,
-                agent_tag=agent.tag_identifier,
-                assignment_reason="voice_call_assignment"
-            )
-            
-            # Update client with agent assignment
-            success = await client_repo.assign_agent_to_client(client.client_id, assignment)
-            
-            if success:
-                # Increment agent's client count
-                await agent_repo.increment_client_count(agent.agent_id)
-                logger.info(f"✅ Successfully assigned {client.full_name} to {agent.name}")
-                return True
-            else:
-                logger.error(f"❌ Failed to assign agent to client")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error assigning agent to client: {e}")
-            return False
-    
-    async def get_agent_availability(self, agent_id: str) -> List[Dict[str, Any]]:
-        """Get agent's available time slots"""
-        try:
-            if not self.calendar_service:
-                logger.warning("⚠️ Calendar service not available, using mock slots")
-                return self._generate_mock_slots()
-            
-            # Get agent from database
-            agent = await agent_repo.get_agent_by_id(agent_id)
-            if not agent:
-                logger.error(f"❌ Agent not found: {agent_id}")
-                return []
-            
-            # Get calendar availability
-            available_slots = await self.calendar_service.get_agent_availability(
-                agent.email, 
-                datetime.now(), 
-                datetime.now() + timedelta(days=7)
-            )
-            
-            return available_slots
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting agent availability: {e}")
-            return self._generate_mock_slots()
-    
-    def _generate_mock_slots(self) -> List[Dict[str, Any]]:
-        """Generate mock time slots for testing"""
-        mock_slots = []
-        now = datetime.now()
+    def _load_agents(self) -> List[Agent]:
+        """Load agent configuration"""
         
-        # Generate slots for next 3 business days
-        for day_offset in range(1, 4):
-            check_date = now + timedelta(days=day_offset)
-            
-            # Skip weekends
-            if check_date.weekday() >= 5:
-                continue
-            
-            # Generate 3 slots per day
-            for hour in [10, 14, 16]:  # 10 AM, 2 PM, 4 PM
-                slot_time = check_date.replace(hour=hour, minute=0, second=0, microsecond=0)
-                
-                slot_data = {
-                    "time": slot_time,
-                    "formatted_time": slot_time.strftime("%A, %B %d at %I:%M %p"),
-                    "timestamp": int(slot_time.timestamp())
-                }
-                
-                mock_slots.append(slot_data)
-                
-                if len(mock_slots) >= 9:  # Max 9 mock slots
-                    break
-            
-            if len(mock_slots) >= 9:
-                break
-        
-        return mock_slots
-
-# Global instance
-agent_assignment_service = AgentAssignmentService()
+        # Default agents configuration
+        default_agents = [
+            {
+                "id": "anthony_fracchia",
+                "name": "Anthony Fracchia",
+                "email": "anthony@altruisadvisor.com",
+                "google_calendar_id": "anthony@altruisadvisor.com",
+                "timezone": "America/New_York",
+                "working_hours": "9AM-5PM",
+                "specialties": ["health", "medicare"],
+                "tag_identifier": "AB - Anthony Fracchia",
+                "client_count": 1861
+            },
+            {
+                "id": "lashawn_boyd",
+                "name": "LaShawn Boyd",
+                "email": "lashawn@altruisadvisor.com",
+                "google_calendar_id": "lashawn@altruisadvisor.com",
+                "timezone": "America/New_York",
+                "working_hours": "9AM-5PM",
+                "specialties": ["auto", "life"],
+                "tag_identifier": "AB - LaShawn Boyd",
+                "client_count": 822
+            },
+            {
+                "id": "india_watson",
+                "name": "India Watson",
+                "email": "india@altruisadvisor.com",
+                "google_calendar_id": "india@altruisadvisor.com",
+                "timezone": "America/New_York",
+                "working_hours": "9AM-5PM",
+                "specialties": ["health", "dental"],
+                "tag_identifier": "AB - India Watson",
+                "client_count": 770
+            },
+            {
+                "id": "hineth_pettway",
+                "name": "Hineth Pettway",
+                "email": "hineth@altruisadvisor.com",
+                "google_calendar_id": "hineth@altruisadvisor.com",
                 "timezone": "America/New_York",
                 "working_hours": "9AM-5PM",
                 "specialties": ["medicare", "supplements"],
