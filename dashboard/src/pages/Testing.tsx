@@ -203,6 +203,7 @@ export default function Testing() {
     phone: "",
     email: "",
     notes: "",
+    client_type: "medicare", // Default to Medicare
   });
   const [newAgent, setNewAgent] = useState({
     name: "",
@@ -365,6 +366,7 @@ export default function Testing() {
           phone: "",
           email: "",
           notes: "",
+          client_type: "medicare", // Default to Medicare
         });
         loadData("clients");
       } else {
@@ -955,6 +957,27 @@ export default function Testing() {
                     placeholder="Additional test notes..."
                     rows={3}
                   />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="clientType">Client Type (Test)</Label>
+                  <Select
+                    value={newClient.client_type}
+                    onValueChange={(value) =>
+                      setNewClient({ ...newClient, client_type: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select client type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="medicare">
+                        Medicare Client (Test)
+                      </SelectItem>
+                      <SelectItem value="non_medicare">
+                        Non-Medicare Client (Test)
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <Button
                   onClick={handleCreateClient}

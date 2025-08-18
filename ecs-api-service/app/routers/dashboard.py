@@ -1,4 +1,4 @@
-"""
+﻿"""
 Production Dashboard Router
 Provides comprehensive dashboard APIs with call summaries and transcripts
 """
@@ -88,6 +88,7 @@ class TestClientCreate(BaseModel):
     phone: str = Field(..., pattern=r'^\+?[1-9]\d{10,14}$')
     email: Optional[str] = None
     notes: Optional[str] = None
+    client_type: Optional[str] = Field(default="medicare", description="Client type: 'medicare' or 'non_medicare'")
 
 class TestAgentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -554,6 +555,13 @@ async def get_test_clients():
 async def create_test_client(client_data: TestClientCreate):
     """Create a test client"""
     try:
+        # Determine CRM tags based on client type
+        crm_tags = []
+        if client_data.client_type == "medicare":
+            crm_tags = [CRMTag.AAG_MEDICARE_CLIENT]
+        elif client_data.client_type == "non_medicare":
+            crm_tags = [CRMTag.AB_ANTHONY_FRACCHIA]  # Default to Anthony for non-Medicare
+        
         client_info = ClientInfo(
             first_name=client_data.first_name,
             last_name=client_data.last_name,
@@ -567,7 +575,7 @@ async def create_test_client(client_data: TestClientCreate):
             campaign_status=CampaignStatus.PENDING,
             total_attempts=0,
             call_history=[],
-            crm_tags=[],
+            crm_tags=crm_tags,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
             is_test_client=True,
@@ -704,7 +712,12 @@ async def initiate_test_call(call_request: TestCallRequest):
                 url=f"{settings.base_url}/twilio/voice",
                 status_callback=f"{settings.base_url}/twilio/status",
                 status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
-                status_callback_method='POST'
+                status_callback_method='POST',
+                machine_detection='Enable',
+                machine_detection_timeout=30,
+                machine_detection_speech_threshold=3000,
+                machine_detection_speech_end_threshold=1000,
+                machine_detection_silence_timeout=5000
             )
             
             logger.info(f"✅ Test call initiated: {call.sid}")

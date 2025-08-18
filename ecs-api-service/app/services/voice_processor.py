@@ -59,6 +59,13 @@ class VoiceProcessor:
             "I appreciate you asking that, let me pull up the specifics for you."
         ]
         
+        # Silence detection responses (matching user requirements)
+        self.silence_responses = {
+            "first": "I'm sorry, I didn't hear anything. Did you say something?",
+            "second": "I'm sorry, I didn't hear anything. Did you say something?",
+            "final": "You can call us back at 8-3-3, 2-2-7, 8-5-0-0. Have a great day."
+        }
+        
         self._configure()
     
     def _configure(self):
@@ -603,6 +610,32 @@ class VoiceProcessor:
             outcome="clarification_needed",
             start_time=start_time,
             detected_intent="unclear"
+        )
+    
+    async def _handle_silence_detection(self, session: CallSession, silence_count: int, start_time: float) -> Dict[str, Any]:
+        """Handle silence detection with progressive responses"""
+        
+        if silence_count == 1:
+            response_text = self.silence_responses["first"]
+            end_conversation = False
+            outcome = "silence_first"
+        elif silence_count == 2:
+            response_text = self.silence_responses["second"]
+            end_conversation = False
+            outcome = "silence_second"
+        else:
+            response_text = self.silence_responses["final"]
+            end_conversation = True
+            outcome = "silence_final"
+        
+        return await self._create_response(
+            response_text=response_text,
+            response_category="silence_detection",
+            conversation_stage=session.conversation_stage,
+            end_conversation=end_conversation,
+            outcome=outcome,
+            start_time=start_time,
+            detected_intent="silence"
         )
     
     async def _create_response(

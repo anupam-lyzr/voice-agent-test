@@ -36,6 +36,8 @@ class CRMTag(str, Enum):
     NO_CONTACT = "LYZR-UC1-NO-CONTACT"
     INVALID_NUMBER = "LYZR-UC1-INVALID-NUMBER"
     INVALID_EMAIL = "LYZR-UC1-INVALID-EMAIL"
+    AAG_MEDICARE_CLIENT = "AAG - Medicare Client"
+    AB_ANTHONY_FRACCHIA = "AB - Anthony Fracchia"
 
 class AudioType(str, Enum):
     """Type of audio used in the call"""

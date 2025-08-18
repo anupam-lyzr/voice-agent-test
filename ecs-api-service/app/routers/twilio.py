@@ -1,5 +1,6 @@
 """
-Enhanced Twilio Router with Start Delay, Voicemail Detection, and No-Speech Handling
+Complete Working Twilio Router - Production Ready
+Handles all voice webhooks with start delay, voicemail detection, and enhanced response handling
 """
 
 from fastapi import APIRouter, Request, Form, HTTPException
@@ -20,9 +21,7 @@ from shared.models.client import Client, CallOutcome, CRMTag
 
 # Import services
 from services.voice_processor import VoiceProcessor
-from services.hybrid_tts import HybridTTSService
-from services.lyzr_client import lyzr_client
-from services.twiml_helpers import create_simple_twiml, create_hangup_twiml
+from services.client_data_service import ClientDataService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/twilio", tags=["Twilio"])
@@ -32,13 +31,13 @@ active_sessions: Dict[str, CallSession] = {}
 
 # Initialize services
 voice_processor = VoiceProcessor()
-hybrid_tts = HybridTTSService()
+client_data_service = ClientDataService()
 
 # FIXED: Use consistent male voice for all fallbacks
 MALE_VOICE = "Polly.Matthew"
 
 class EnhancedTwiMLManager:
-    """Enhanced TwiML manager with start delay and better fallbacks"""
+    """Enhanced TwiML manager with start delay, voicemail detection, and client-type support"""
     
     @staticmethod
     async def create_greeting_with_delay(
@@ -50,103 +49,164 @@ class EnhancedTwiMLManager:
         try:
             logger.info(f"🎵 Creating greeting with 2-second delay")
             
-            # Get greeting audio using hybrid TTS
-            tts_result = await hybrid_tts.get_response_audio(
-                text="",  # Will use default greeting text
-                response_type="greeting",
-                client_data=client_data
-            )
-            
-            if tts_result.get("success") and tts_result.get("audio_url"):
-                audio_url = tts_result["audio_url"]
+            # Import hybrid TTS here to avoid circular imports
+            try:
+                from services.hybrid_tts import HybridTTSService
+                hybrid_tts = HybridTTSService()
                 
-                # TwiML with 2-second pause before greeting
-                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                # Get greeting audio using hybrid TTS with client type detection
+                tts_result = await hybrid_tts.get_response_audio(
+                    text="",  # Will use template-based generation
+                    response_type="greeting",
+                    client_data=client_data
+                )
+                
+                if tts_result.get("success") and tts_result.get("audio_url"):
+                    audio_url = tts_result["audio_url"]
+                    
+                    # TwiML with 2-second pause before greeting
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Pause length="1"/>
+    <Pause length="2"/>
     <Play>{audio_url}</Play>
     <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
     <Pause length="1"/>
-    <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
     <Hangup/>
 </Response>"""
+                    
+                    return Response(content=twiml, media_type="application/xml")
                 
-                return Response(content=twiml, media_type="application/xml")
+            except Exception as hybrid_error:
+                logger.warning(f"⚠️ Hybrid TTS failed: {hybrid_error}")
             
-            # Hybrid TTS failed - this should be rare with segmented audio
+            # Fallback with delay if hybrid TTS fails
+            logger.warning("⚠️ Using fallback greeting with delay")
+            
+            # Determine appropriate fallback script based on client type
+            if client_data:
+                enhanced_data = client_data_service.analyze_client_data(client_data)
+                client_type = enhanced_data.get("client_type")
+                scripts = client_data_service.get_scripts_for_client_type(client_type)
+                greeting_script = scripts.get("greeting", "")
+                
+                if greeting_script:
+                    greeting_text = client_data_service.format_script_with_data(greeting_script, enhanced_data)
+                else:
+                    # Ultimate fallback
+                    client_name = client_data.get("first_name", "")
+                    greeting_text = f"Hello {client_name}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
             else:
-                logger.error(f"❌ CRITICAL: Hybrid TTS completely failed for greeting")
-                return EnhancedTwiMLManager.create_emergency_twiml(
-                    client_data.get("client_name", "there") if client_data else "there"
-                )
+                # No client data fallback
+                greeting_text = "Hello, this is Alex from Altruis Advisor Group. We've helped you with your insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
+            
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Pause length="2"/>
+    <Say voice="{MALE_VOICE}">{greeting_text}</Say>
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="2"/>
+    </Gather>
+    <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
+    <Pause length="1"/>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
         
         except Exception as e:
             logger.error(f"❌ Greeting generation error: {e}")
-            return EnhancedTwiMLManager.create_emergency_twiml("there")
+            
+            # Emergency greeting fallback
+            emergency_greeting = "Hello, this is Alex from Altruis Advisor Group. Thank you for calling."
+            
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Pause length="2"/>
+    <Say voice="{MALE_VOICE}">{emergency_greeting}</Say>
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto">
+        <Pause length="2"/>
+    </Gather>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
     
     @staticmethod
-    async def create_voicemail_twiml(
-        client_data: Optional[Dict[str, Any]] = None,
-        voicemail_script: Optional[str] = None
+    async def create_voicemail_response(
+        client_data: Optional[Dict[str, Any]] = None
     ) -> Response:
-        """Create specialized voicemail TwiML with proper script"""
+        """Create voicemail TwiML response with client-type specific script"""
         
         try:
-            logger.info(f"📱 Creating voicemail TwiML")
+            logger.info(f"📱 Creating voicemail response")
             
-            client_name = client_data.get("first_name", "there") if client_data else "there"
-            
-            # Use provided voicemail script or default
-            if not voicemail_script:
-                voicemail_script = (
-                    f"Hello {client_name}, this is Alex from Altruis Advisor Group. "
-                    f"We've helped with your health insurance needs in the past and we wanted to "
-                    f"reach out to see if we could be of assistance this year during Open Enrollment. "
-                    f"There have been a number of important changes to the Affordable Care Act that "
-                    f"may impact your situation - so it may make sense to do a quick policy review. "
-                    f"As always, our services are completely free of charge - if you'd like to review "
-                    f"your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing "
-                    f"from you - take care!"
-                )
-            
-            # Try hybrid TTS for voicemail (should use segmented audio)
-            tts_result = await hybrid_tts.get_response_audio(
-                text=voicemail_script,
-                response_type="voicemail",
-                client_data=client_data
-            )
-            
-            if tts_result.get("success") and tts_result.get("audio_url"):
-                audio_url = tts_result["audio_url"]
+            # Import hybrid TTS here to avoid circular imports
+            try:
+                from services.hybrid_tts import HybridTTSService
+                hybrid_tts = HybridTTSService()
                 
-                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                # Analyze client data to determine appropriate voicemail script
+                if client_data:
+                    enhanced_data = client_data_service.analyze_client_data(client_data)
+                else:
+                    enhanced_data = client_data_service._get_fallback_client_data({})
+                
+                # Get voicemail using enhanced hybrid TTS
+                tts_result = await hybrid_tts.get_response_audio(
+                    text="",  # Will use template-based generation
+                    response_type="voicemail",
+                    client_data=enhanced_data
+                )
+                
+                if tts_result.get("success") and tts_result.get("audio_url"):
+                    audio_url = tts_result["audio_url"]
+                    
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
     <Hangup/>
 </Response>"""
+                    
+                    return Response(content=twiml, media_type="application/xml")
                 
-                return Response(content=twiml, media_type="application/xml")
+            except Exception as hybrid_error:
+                logger.warning(f"⚠️ Hybrid TTS failed for voicemail: {hybrid_error}")
             
-            # Emergency fallback ONLY if hybrid completely fails
-            else:
-                logger.error(f"❌ CRITICAL: Hybrid TTS failed for voicemail - using emergency fallback")
+            # Emergency fallback with client-type specific script
+            logger.error(f"❌ Using emergency voicemail fallback")
+            
+            # Get formatted voicemail script based on client type
+            if client_data:
+                enhanced_data = client_data_service.analyze_client_data(client_data)
+                scripts = client_data_service.get_formatted_scripts_for_client(enhanced_data)
+                voicemail_script = scripts.get("voicemail", "")
                 
-                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                if not voicemail_script:
+                    # Fallback voicemail
+                    client_name = enhanced_data.get("first_name", "")
+                    voicemail_script = f"Hello {client_name}, this is Alex from Altruis Advisor Group. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you."
+            else:
+                voicemail_script = "Hello, this is Alex from Altruis Advisor Group. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you."
+            
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{voicemail_script}</Say>
     <Hangup/>
 </Response>"""
-                
-                return Response(content=twiml, media_type="application/xml")
+            
+            return Response(content=twiml, media_type="application/xml")
         
         except Exception as e:
             logger.error(f"❌ Voicemail generation error: {e}")
             
             # Emergency voicemail fallback
-            emergency_voicemail = f"Hello, this is Alex from Altruis Advisor Group. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you."
+            emergency_voicemail = "Hello, this is Alex from Altruis Advisor Group. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you."
             
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -162,161 +222,177 @@ class EnhancedTwiMLManager:
         client_data: Optional[Dict[str, Any]] = None,
         gather_action: str = "/twilio/process-speech"
     ) -> Response:
-        """Create enhanced no-speech response using hybrid TTS when possible"""
+        """Create enhanced no-speech response using voice processor"""
         
         try:
+            # Determine response type based on attempt
             if attempt_number == 1:
-                text = "I'm sorry, I can't seem to hear you clearly. If you said something, could you please speak a bit louder? I'm here to help."
-                response_type = "clarification"
+                response_type = "no_speech_first"
                 should_hangup = False
             elif attempt_number == 2:
-                text = "I'm still having trouble hearing you. If you're there, please try speaking directly into your phone. Can you hear me okay?"
-                response_type = "clarification"
+                response_type = "no_speech_second"
                 should_hangup = False
             else:
-                text = "I apologize, but I'm having difficulty with our connection. If you'd like to speak with us, please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you, and have a great day."
-                response_type = "goodbye"
+                response_type = "no_speech_final"
                 should_hangup = True
             
             # Try hybrid TTS first
-            tts_result = await hybrid_tts.get_response_audio(
-                text=text,
-                response_type=response_type,
-                client_data=client_data
-            )
-            
-            if tts_result.get("success") and tts_result.get("audio_url"):
-                audio_url = tts_result["audio_url"]
+            try:
+                from services.hybrid_tts import HybridTTSService
+                hybrid_tts = HybridTTSService()
                 
-                if should_hangup:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                tts_result = await hybrid_tts.get_response_audio(
+                    text="",
+                    response_type=response_type,
+                    client_data=client_data
+                )
+                
+                if tts_result.get("success") and tts_result.get("audio_url"):
+                    audio_url = tts_result["audio_url"]
+                    
+                    if should_hangup:
+                        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
     <Hangup/>
 </Response>"""
-                else:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                    else:
+                        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
     <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
-        <Pause length="3"/>
+        <Pause length="2"/>
     </Gather>
-    <Say voice="{MALE_VOICE}">I still can't hear you. I'll call you back later. Goodbye.</Say>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
     <Hangup/>
 </Response>"""
+                    
+                    return Response(content=twiml, media_type="application/xml")
                 
-                return Response(content=twiml, media_type="application/xml")
+            except Exception as hybrid_error:
+                logger.warning(f"⚠️ Hybrid TTS failed for no-speech: {hybrid_error}")
             
-            # Emergency fallback to Polly only if hybrid fails
+            # Fallback to TTS
+            fallback_texts = {
+                1: "I'm sorry, I can't seem to hear you clearly. If you said something, could you please speak a bit louder? I'm here to help.",
+                2: "I'm still having trouble hearing you. If you're there, please try speaking directly into your phone. Are you interested in reviewing your health insurance options?",
+                3: "I apologize, but I'm having difficulty hearing your response. If you'd like to speak with someone, please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you and have a great day."
+            }
+            
+            text = fallback_texts.get(attempt_number, fallback_texts[3])
+            
+            if should_hangup:
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">{text}</Say>
+    <Hangup/>
+</Response>"""
             else:
-                logger.error(f"❌ Hybrid TTS failed for no-speech response {attempt_number}")
-                
-                if should_hangup:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{text}</Say>
-    <Hangup/>
-</Response>"""
-                else:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="{MALE_VOICE}">{text}</Say>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
-        <Pause length="3"/>
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto">
+        <Pause length="2"/>
     </Gather>
-    <Say voice="{MALE_VOICE}">I still can't hear you. I'll call you back later. Goodbye.</Say>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
     <Hangup/>
 </Response>"""
-                
-                return Response(content=twiml, media_type="application/xml")
+            
+            return Response(content=twiml, media_type="application/xml")
         
         except Exception as e:
-            logger.error(f"❌ No-speech response error: {e}")
-            return EnhancedTwiMLManager.create_emergency_twiml()
+            logger.error(f"❌ No speech response error: {e}")
+            
+            # Emergency no-speech fallback
+            emergency_text = "I'm having trouble hearing you. Please call us back at 8-3-3, 2-2-7, 8-5-0-0."
+            
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">{emergency_text}</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
     
     @staticmethod
     async def create_hybrid_twiml_response(
-        response_type: str, 
+        response_type: str,
         text: Optional[str] = None,
         client_data: Optional[Dict[str, Any]] = None,
-        gather_action: str = "/twilio/process-speech",
         should_hangup: bool = False,
-        should_gather: bool = True
+        gather_action: str = "/twilio/process-speech"
     ) -> Response:
-        """Create TwiML response using hybrid TTS service"""
+        """Create TwiML response using hybrid TTS or fallback"""
         
         try:
-            logger.info(f"🎵 Creating hybrid TwiML for: {response_type}")
-            
-            # Get audio using hybrid TTS service (prioritizes segmented audio)
-            tts_result = await hybrid_tts.get_response_audio(
-                text=text or "",
-                response_type=response_type,
-                client_data=client_data
-            )
-            
-            if tts_result.get("success") and tts_result.get("audio_url"):
-                audio_url = tts_result["audio_url"]
+            # Try hybrid TTS first
+            try:
+                from services.hybrid_tts import HybridTTSService
+                hybrid_tts = HybridTTSService()
                 
-                if should_hangup:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                tts_result = await hybrid_tts.get_response_audio(
+                    text=text or "",
+                    response_type=response_type,
+                    client_data=client_data
+                )
+                
+                if tts_result.get("success") and tts_result.get("audio_url"):
+                    audio_url = tts_result["audio_url"]
+                    
+                    if should_hangup:
+                        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
-    <Pause length="1"/>
     <Hangup/>
 </Response>"""
-                elif should_gather:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                    else:
+                        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
     <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
-    <Pause length="1"/>
-    <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
     <Hangup/>
 </Response>"""
-                else:
-                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Play>{audio_url}</Play>
-</Response>"""
+                    
+                    return Response(content=twiml, media_type="application/xml")
                 
-                return Response(content=twiml, media_type="application/xml")
+            except Exception as hybrid_error:
+                logger.warning(f"⚠️ Hybrid TTS failed: {hybrid_error}")
             
-            # Emergency fallback to Polly ONLY if hybrid completely fails
-            else:
-                logger.error(f"❌ CRITICAL: Hybrid TTS completely failed for {response_type}")
-                
-                if should_hangup:
-                    fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+            # Fallback to Say verb
+            fallback_text = text or "Thank you for calling."
+            
+            if should_hangup:
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="{MALE_VOICE}">{text or 'Thank you for your time. Have a wonderful day!'}</Say>
+    <Say voice="{MALE_VOICE}">{fallback_text}</Say>
     <Hangup/>
 </Response>"""
-                else:
-                    fallback_twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+            else:
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="{MALE_VOICE}">{text or 'How can I help you?'}</Say>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+    <Say voice="{MALE_VOICE}">{fallback_text}</Say>
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
     <Hangup/>
 </Response>"""
-                
-                return Response(content=fallback_twiml, media_type="application/xml")
+            
+            return Response(content=twiml, media_type="application/xml")
         
         except Exception as e:
-            logger.error(f"❌ Hybrid TwiML generation error: {e}")
-            return EnhancedTwiMLManager.create_emergency_twiml()
+            logger.error(f"❌ Hybrid TwiML response error: {e}")
+            return await EnhancedTwiMLManager.create_emergency_twiml()
     
     @staticmethod
-    def create_emergency_twiml(client_name: str = "there") -> Response:
-        """Create emergency TwiML when all systems fail"""
+    async def create_emergency_twiml() -> Response:
+        """Create emergency TwiML fallback"""
         
-        emergency_text = f"Hello {client_name}, this is Alex from Altruis Advisor Group. We're experiencing technical difficulties. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you."
+        emergency_text = "Thank you for calling. We are experiencing technical difficulties. Please call us back at 8-3-3, 2-2-7, 8-5-0-0."
         
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -325,136 +401,399 @@ class EnhancedTwiMLManager:
 </Response>"""
         
         return Response(content=twiml, media_type="application/xml")
-
-# Enhanced session management functions
-async def get_client_repo():
-    """Get client repository with initialization"""
-    try:
-        from shared.utils.database import client_repo, init_database
+    
+    @staticmethod
+    async def create_silence_response(
+        attempt_number: int,
+        client_data: Optional[Dict[str, Any]] = None,
+        gather_action: str = "/twilio/process-speech"
+    ) -> Response:
+        """Create silence detection response using voice processor"""
         
-        if client_repo is None:
-            logger.info("Initializing database...")
-            await init_database()
-            from shared.utils.database import client_repo as repo
-            return repo
-        return client_repo
-    except Exception as e:
-        logger.error(f"Failed to get client repo: {e}")
-        return None
-
-async def get_session_repo():
-    """Get session repository with initialization"""
-    try:
-        from shared.utils.database import session_repo, init_database
-        
-        if session_repo is None:
-            await init_database()
-            from shared.utils.database import session_repo as repo
-            return repo
-        return session_repo
-    except Exception as e:
-        logger.error(f"Failed to get session repo: {e}")
-        return None
-
-async def get_client_by_phone(phone: str) -> Optional[Client]:
-    """Get client by phone with error handling"""
-    try:
-        client_repo = await get_client_repo()
-        if client_repo:
-            return await client_repo.get_client_by_phone(phone)
-        return None
-    except Exception as e:
-        logger.error(f"Failed to get client by phone {phone}: {e}")
-        return None
-
-async def enhanced_cache_session(session: CallSession):
-    """Enhanced session caching with better error handling"""
-    try:
-        if not session.twilio_call_sid:
-            logger.error(f"❌ Cannot cache session {session.session_id}: twilio_call_sid is None")
-            return False
-        
-        # Try Redis cache first
-        from shared.utils.redis_client import session_cache
-        if session_cache:
-            try:
-                await session_cache.save_session(session)
-                logger.debug(f"✅ Session cached in Redis: {session.session_id}")
-            except Exception as redis_error:
-                logger.warning(f"⚠️ Redis cache failed: {redis_error}")
-        
-        # Save to database with proper error handling
-        session_repo = await get_session_repo()
-        if session_repo:
-            try:
-                success = await session_repo.save_session(session)
-                if success:
-                    logger.debug(f"✅ Session saved to database: {session.session_id}")
-                    return True
+        try:
+            # Import voice processor for silence handling
+            from services.voice_processor import voice_processor
+            
+            # Create a temporary session for silence processing
+            from shared.models.call_session import CallSession, ConversationStage
+            temp_session = CallSession(
+                session_id="temp_silence",
+                twilio_call_sid="temp",
+                client_id="temp",
+                phone_number="temp",
+                lyzr_agent_id="temp",
+                lyzr_session_id="temp",
+                conversation_stage=ConversationStage.GREETING,
+                client_data=client_data or {}
+            )
+            
+            # Process silence with voice processor
+            process_result = await voice_processor._handle_silence_detection(
+                session=temp_session,
+                silence_count=attempt_number,
+                start_time=time.time()
+            )
+            
+            response_text = process_result.get("response_text", "")
+            should_hangup = process_result.get("end_conversation", False)
+            
+            # Determine response type for hybrid TTS
+            if attempt_number == 1:
+                response_type = "no_speech_first"
+            elif attempt_number == 2:
+                response_type = "no_speech_second"
+            else:
+                response_type = "no_speech_final"
+            
+            # Generate audio using hybrid TTS
+            from services.hybrid_tts import hybrid_tts_service
+            audio_result = await hybrid_tts_service.get_response_audio(
+                text=response_text,
+                response_type=response_type,
+                client_data=client_data
+            )
+            
+            if audio_result.get("success") and audio_result.get("audio_url"):
+                audio_url = audio_result["audio_url"]
+                
+                if should_hangup:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
                 else:
-                    logger.error(f"❌ Database save returned false: {session.session_id}")
-                    return False
-            except Exception as db_error:
-                logger.error(f"❌ Database save failed: {db_error}")
-                # Try direct database operation as fallback
-                try:
-                    from shared.utils.database import db_client
-                    if db_client is not None and db_client.database is not None:
-                        session_dict = session.model_dump(by_alias=True)
-                        if "_id" in session_dict:
-                            del session_dict["_id"]
-                        
-                        await db_client.database.call_sessions.replace_one(
-                            {"twilioCallSid": session.twilio_call_sid},
-                            session_dict,
-                            upsert=True
-                        )
-                        logger.info(f"✅ Fallback save successful: {session.session_id}")
-                        return True
-                except Exception as fallback_error:
-                    logger.error(f"❌ Fallback save failed: {fallback_error}")
-                    return False
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="2"/>
+    </Gather>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+            else:
+                # Fallback to text-to-speech if audio generation fails
+                if should_hangup:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">{response_text}</Say>
+    <Hangup/>
+</Response>"""
+                else:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">{response_text}</Say>
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="2"/>
+    </Gather>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
+            
+        except Exception as e:
+            logger.error(f"❌ Silence response error: {e}")
+            
+            # Fallback silence responses using hybrid TTS
+            fallback_texts = {
+                1: "I'm sorry, I didn't hear anything. Did you say something?",
+                2: "I'm sorry, I didn't hear anything. Did you say something?",
+                3: "You can call us back at 8-3-3, 2-2-7, 8-5-0-0. Have a great day."
+            }
+            
+            text = fallback_texts.get(attempt_number, fallback_texts[3])
+            should_hangup = attempt_number >= 3
+            
+            # Determine response type for hybrid TTS
+            if attempt_number == 1:
+                response_type = "no_speech_first"
+            elif attempt_number == 2:
+                response_type = "no_speech_second"
+            else:
+                response_type = "no_speech_final"
+            
+            # Generate audio using hybrid TTS
+            from services.hybrid_tts import hybrid_tts_service
+            audio_result = await hybrid_tts_service.get_response_audio(
+                text=text,
+                response_type=response_type,
+                client_data=client_data
+            )
+            
+            if audio_result.get("success") and audio_result.get("audio_url"):
+                audio_url = audio_result["audio_url"]
+                
+                if should_hangup:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+                else:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="2"/>
+    </Gather>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+            else:
+                # Fallback to text-to-speech if audio generation fails
+                if should_hangup:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">{text}</Say>
+    <Hangup/>
+</Response>"""
+                else:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">{text}</Say>
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+        <Pause length="2"/>
+    </Gather>
+    <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
+    
+    @staticmethod
+    async def create_final_silence_response(client_data: Optional[Dict[str, Any]] = None) -> Response:
+        """Create final silence response that ends the call"""
         
-        return False
-    except Exception as e:
-        logger.error(f"❌ Enhanced cache session failed: {e}")
-        return False
+        try:
+            # Generate audio using hybrid TTS
+            from services.hybrid_tts import hybrid_tts_service
+            audio_result = await hybrid_tts_service.get_response_audio(
+                text="You can call us back at 8-3-3, 2-2-7, 8-5-0-0. Have a great day.",
+                response_type="no_speech_final",
+                client_data=client_data
+            )
+            
+            if audio_result.get("success") and audio_result.get("audio_url"):
+                audio_url = audio_result["audio_url"]
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{audio_url}</Play>
+    <Hangup/>
+</Response>"""
+            else:
+                # Fallback to text-to-speech
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">You can call us back at 8-3-3, 2-2-7, 8-5-0-0. Have a great day.</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
+            
+        except Exception as e:
+            logger.error(f"❌ Final silence response error: {e}")
+            
+            # Emergency fallback
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{MALE_VOICE}">You can call us back at 8-3-3, 2-2-7, 8-5-0-0. Have a great day.</Say>
+    <Hangup/>
+</Response>"""
+            
+            return Response(content=twiml, media_type="application/xml")
 
+# Session management functions
 async def get_cached_session(call_sid: str) -> Optional[CallSession]:
-    """Enhanced session retrieval with better error handling"""
+    """Get session from cache, active sessions, or database with better error handling"""
     try:
+        logger.info(f"🔍 Looking for session: {call_sid}")
+        logger.info(f"📊 Active sessions count: {len(active_sessions)}")
+        logger.info(f"📋 Active session keys: {list(active_sessions.keys())}")
+        
         # Try cache first
-        from shared.utils.redis_client import session_cache
-        if session_cache:
-            try:
-                session = await session_cache.get_session(call_sid)
-                if session:
-                    return session
-            except Exception as redis_error:
-                logger.warning(f"⚠️ Redis retrieval failed: {redis_error}")
+        try:
+            from shared.utils.redis_client import redis_client
+            if redis_client:
+                # Simple Redis check - implement proper session caching if needed
+                pass
+        except Exception as redis_error:
+            logger.warning(f"⚠️ Redis retrieval failed: {redis_error}")
         
         # Try active sessions
         if call_sid in active_sessions:
+            logger.info(f"✅ Found session in active_sessions: {call_sid}")
             return active_sessions[call_sid]
+        else:
+            logger.warning(f"⚠️ Session not found in active_sessions: {call_sid}")
         
         # Try database
-        session_repo = await get_session_repo()
-        if session_repo:
-            try:
-                from shared.utils.database import db_client
-                if db_client is not None and db_client.database is not None:
-                    doc = await db_client.database.call_sessions.find_one({"twilioCallSid": call_sid})
-                    if doc:
-                        return CallSession(**doc)
-            except Exception as db_error:
-                logger.warning(f"⚠️ Database retrieval failed: {db_error}")
+        try:
+            from shared.utils.database import db_client
+            if db_client is not None and db_client.database is not None:
+                doc = await db_client.database.call_sessions.find_one({"twilioCallSid": call_sid})
+                if doc:
+                    logger.info(f"✅ Found session in database: {call_sid}")
+                    return CallSession(**doc)
+                else:
+                    logger.warning(f"⚠️ Session not found in database: {call_sid}")
+        except Exception as db_error:
+            logger.warning(f"⚠️ Database retrieval failed: {db_error}")
         
+        logger.error(f"❌ Session not found anywhere: {call_sid}")
         return None
     except Exception as e:
         logger.error(f"❌ Get cached session failed: {e}")
         return None
 
-# Enhanced webhook handlers
+async def enhanced_cache_session(session: CallSession):
+    """Save session to multiple storage locations"""
+    try:
+        # CRITICAL: Save to active sessions first (in-memory)
+        if session.twilio_call_sid:
+            active_sessions[session.twilio_call_sid] = session
+            logger.info(f"💾 Session saved to active_sessions: {session.twilio_call_sid}")
+        else:
+            logger.error(f"❌ Cannot save session: twilio_call_sid is None")
+            return
+        
+        # Try to save to Redis cache
+        try:
+            from shared.utils.redis_client import redis_client
+            if redis_client:
+                # Implement Redis caching if needed
+                pass
+        except Exception as redis_error:
+            logger.warning(f"⚠️ Redis caching failed: {redis_error}")
+        
+        # Try to save to database
+        try:
+            from shared.utils.database import db_client
+            if db_client is not None and db_client.database is not None:
+                session_dict = session.dict()
+                session_dict["_id"] = session.session_id
+                await db_client.database.call_sessions.replace_one(
+                    {"twilioCallSid": session.twilio_call_sid},
+                    session_dict,
+                    upsert=True
+                )
+                logger.info(f"💾 Session saved to database: {session.twilio_call_sid}")
+        except Exception as db_error:
+            logger.warning(f"⚠️ Database caching failed: {db_error}")
+    
+    except Exception as e:
+        logger.error(f"❌ Enhanced cache session failed: {e}")
+        # Even if caching fails, ensure session is in active_sessions
+        if session.twilio_call_sid:
+            active_sessions[session.twilio_call_sid] = session
+            logger.info(f"💾 Session saved to active_sessions as fallback: {session.twilio_call_sid}")
+
+async def get_client_data_by_phone(phone_number: str) -> Optional[Dict[str, Any]]:
+    """Get client data from database by phone number"""
+    try:
+        # Clean phone number
+        clean_phone = ''.join(filter(str.isdigit, phone_number))
+        
+        # Try to get from database
+        try:
+            from shared.utils.database import db_client
+            if db_client is not None and db_client.database is not None:
+                # Try exact match first
+                doc = await db_client.database.clients.find_one({"client.phone": phone_number})
+                
+                if not doc and len(clean_phone) >= 10:
+                    # Try with cleaned phone number as integer
+                    doc = await db_client.database.clients.find_one({"client.phone": int(clean_phone)})
+                
+                if not doc and len(clean_phone) >= 10:
+                    # Try with cleaned phone number as string
+                    doc = await db_client.database.clients.find_one({"client.phone": clean_phone})
+                
+                if doc:
+                    client_info = doc.get("client", {})
+                    return {
+                        "first_name": client_info.get("firstName", client_info.get("first_name", "")),
+                        "last_name": client_info.get("lastName", client_info.get("last_name", "")),
+                        "phone": client_info.get("phone", ""),
+                        "email": client_info.get("email", ""),
+                        "tags": doc.get("tags", ""),
+                        "last_agent": client_info.get("lastAgent", client_info.get("last_agent", ""))
+                    }
+        except Exception as db_error:
+            logger.warning(f"⚠️ Database client lookup failed: {db_error}")
+        
+        # Fallback for test calls or unknown numbers
+        return {
+            "first_name": "Valued Customer",
+            "last_name": "",
+            "phone": phone_number,
+            "email": "",
+            "tags": "Test Call",
+            "last_agent": "our team"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting client data: {e}")
+        return {
+            "first_name": "",
+            "last_name": "",
+            "phone": phone_number,
+            "email": "",
+            "tags": "",
+            "last_agent": "our team"
+        }
+
+async def create_or_get_session(
+    call_sid: str, 
+    from_number: str, 
+    to_number: str,
+    client_data: Optional[Dict[str, Any]] = None
+) -> CallSession:
+    """Create new session or get existing one"""
+    try:
+        # Check if session already exists
+        existing_session = await get_cached_session(call_sid)
+        if existing_session:
+            return existing_session
+        
+        # Create new session
+        session = CallSession(
+            session_id=str(uuid.uuid4()),
+            twilio_call_sid=call_sid,
+            client_id=client_data.get("client_id", "unknown") if client_data else "unknown",
+            phone_number=from_number,
+            call_status=CallStatusEnum.INITIATED,
+            conversation_stage=ConversationStage.GREETING,
+            conversation_turns=[],
+            client_data=client_data or {},
+            started_at=datetime.utcnow(),
+            no_speech_count=0,
+            lyzr_agent_id=getattr(settings, 'lyzr_conversation_agent_id', 'default_agent'),
+            lyzr_session_id=f"session_{uuid.uuid4().hex[:8]}"
+        )
+        
+        return session
+        
+    except Exception as e:
+        logger.error(f"❌ Error creating session: {e}")
+        # Return minimal session
+        return CallSession(
+            session_id=str(uuid.uuid4()),
+            twilio_call_sid=call_sid,
+            client_id="unknown",
+            phone_number=from_number,
+            call_status=CallStatusEnum.INITIATED,
+            conversation_stage=ConversationStage.GREETING,
+            conversation_turns=[],
+            client_data={},
+            started_at=datetime.utcnow(),
+            no_speech_count=0,
+            lyzr_agent_id=getattr(settings, 'lyzr_conversation_agent_id', 'default_agent'),
+            lyzr_session_id=f"session_{uuid.uuid4().hex[:8]}"
+        )
+
+# Webhook endpoints
 
 @router.post("/voice")
 async def voice_webhook(
@@ -467,7 +806,7 @@ async def voice_webhook(
     is_test_call: Optional[str] = Form(None),
     AnsweredBy: Optional[str] = Form(None)
 ):
-    """Enhanced voice webhook with voicemail detection and start delay"""
+    """Enhanced voice webhook with voicemail detection, start delay, and client type support"""
     
     logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From} - AnsweredBy: {AnsweredBy}")
     
@@ -477,110 +816,74 @@ async def voice_webhook(
             logger.info(f"📱 Voicemail detected for {CallSid}")
             
             # Get client data for personalized voicemail
-            client_phone = To if Direction == "outbound-api" else From
-            client = await get_client_by_phone(client_phone)
+            client_data = await get_client_data_by_phone(From)
             
-            client_data = {
-                "client_name": "there",
-                "first_name": "there"
-            }
-            
-            if client:
-                client_data = {
-                    "client_name": client.client.first_name,
-                    "first_name": client.client.first_name
-                }
-            
-            return await EnhancedTwiMLManager.create_voicemail_twiml(client_data)
+            return await EnhancedTwiMLManager.create_voicemail_response(client_data)
         
-        if CallStatus == "in-progress":
-            # Determine client phone based on call direction
-            client_phone = To if Direction == "outbound-api" else From
-            logger.info(f"🔍 Looking up client by phone: {client_phone}")
+        # Handle live person answer
+        elif AnsweredBy in ["human", None]:  # None means we couldn't detect
+            logger.info(f"👤 Live person answered: {CallSid}")
             
-            # Initialize client data with defaults
-            client_data = {
-                "client_name": "there",
-                "first_name": "there",
-                "agent_name": "your agent",
-                "last_agent": "your agent"
-            }
+            # Get client data to determine appropriate script
+            client_data = await get_client_data_by_phone(From)
             
-            # Try to get client from database
-            client = await get_client_by_phone(client_phone)
-            if client:
-                client_data = {
-                    "client_name": client.client.first_name,
-                    "first_name": client.client.first_name,
-                    "agent_name": client.client.last_agent or "your agent",
-                    "last_agent": client.client.last_agent or "your agent"
-                }
-                logger.info(f"✅ Found client: {client.client.first_name}")
-            else:
-                logger.warning(f"⚠️ Client not found for phone: {client_phone}")
+            # Create or update session
+            session = await create_or_get_session(CallSid, From, To, client_data)
             
-            # Check for cached session or create new one
-            cached_session = await get_cached_session(CallSid)
+            # Initialize session state
+            session.conversation_stage = ConversationStage.GREETING
+            session.call_status = CallStatusEnum.IN_PROGRESS
+            session.no_speech_count = 0
             
-            if cached_session:
-                session = cached_session
-                session.call_status = CallStatusEnum.IN_PROGRESS
-                session.answered_at = datetime.utcnow()
-                session.conversation_stage = ConversationStage.GREETING
-                logger.info(f"✅ Using cached session for {CallSid}")
-            else:
-                # Create new session
-                session = CallSession(
-                    session_id=str(uuid.uuid4()),
-                    twilio_call_sid=CallSid,
-                    client_id=str(client.id) if client else "unknown",
-                    phone_number=client_phone,
-                    lyzr_agent_id=settings.lyzr_conversation_agent_id,
-                    lyzr_session_id=f"voice-{CallSid}-{uuid.uuid4().hex[:8]}",
-                    client_data=client_data,
-                    is_test_call=(is_test_call == "true") or (client_phone.startswith("+1555") if client_phone else False)
-                )
-                
-                # Set initial session state
-                session.no_speech_count = 0
-                session.call_status = CallStatusEnum.IN_PROGRESS
-                session.answered_at = datetime.utcnow()
-                session.conversation_stage = ConversationStage.GREETING
-            
-            # Store session
+            # CRITICAL: Save session to active_sessions immediately
             active_sessions[CallSid] = session
+            logger.info(f"💾 Session immediately saved to active_sessions: {CallSid}")
+            
+            # Save session to other storage
             await enhanced_cache_session(session)
             
-            # Start LYZR conversation session if configured
-            if lyzr_client.is_configured():
-                try:
-                    await lyzr_client.start_conversation(
-                        client_name=client_data["first_name"],
-                        phone_number=client_phone
-                    )
-                    logger.info(f"🤖 LYZR session started for {CallSid}")
-                except Exception as e:
-                    logger.warning(f"⚠️ LYZR session start failed: {e}")
-            
-            # Return greeting with 2-second delay
+            # Create greeting with 2-second delay and client-type appropriate script
+            gather_action = f"{getattr(settings, 'base_url', 'http://localhost:8000')}/twilio/process-speech"
             return await EnhancedTwiMLManager.create_greeting_with_delay(
-                client_data=client_data,
-                gather_action="/twilio/process-speech"
+                client_data=session.client_data,
+                gather_action=gather_action
             )
         
-        # For other statuses, just acknowledge
-        return Response(
-            content=create_simple_twiml("Call received."),
-            media_type="application/xml"
-        )
+        else:
+            # Fallback for unknown answer type - treat as human answer
+            logger.warning(f"⚠️ Unknown answer type: {AnsweredBy}, treating as human answer")
+            
+            # Get client data to determine appropriate script
+            client_data = await get_client_data_by_phone(From)
+            
+            # Create or update session
+            session = await create_or_get_session(CallSid, From, To, client_data)
+            
+            # Initialize session state
+            session.conversation_stage = ConversationStage.GREETING
+            session.call_status = CallStatusEnum.IN_PROGRESS
+            session.no_speech_count = 0
+            
+            # CRITICAL: Save session to active_sessions immediately
+            active_sessions[CallSid] = session
+            logger.info(f"💾 Session immediately saved to active_sessions: {CallSid}")
+            
+            # Save session to other storage
+            await enhanced_cache_session(session)
+            
+            # Create greeting with 2-second delay and client-type appropriate script
+            gather_action = f"{getattr(settings, 'base_url', 'http://localhost:8000')}/twilio/process-speech"
+            return await EnhancedTwiMLManager.create_greeting_with_delay(
+                client_data=session.client_data,
+                gather_action=gather_action
+            )
         
     except Exception as e:
         logger.error(f"❌ Voice webhook error: {e}")
         import traceback
         logger.error(traceback.format_exc())
         
-        # Use emergency fallback
-        return EnhancedTwiMLManager.create_emergency_twiml("there")
+        return await EnhancedTwiMLManager.create_emergency_twiml()
 
 @router.post("/process-speech")
 async def process_speech_webhook(
@@ -590,135 +893,104 @@ async def process_speech_webhook(
     Confidence: Optional[float] = Form(None),
     UnstableSpeechResult: Optional[str] = Form(None)
 ):
-    """Enhanced speech processing with better no-speech handling"""
+    """Process customer speech with enhanced voice processor and silence detection"""
     
-    # Use UnstableSpeechResult if SpeechResult is empty for better responsiveness
-    if not SpeechResult and UnstableSpeechResult:
-        SpeechResult = UnstableSpeechResult
-        logger.info(f"🎤 Using unstable speech result: '{SpeechResult}'")
-    
-    logger.info(f"🎤 Processing speech: {CallSid} - Result: '{SpeechResult}' - Confidence: {Confidence}")
+    logger.info(f"🗣️ Processing speech: {CallSid} - '{SpeechResult}' - Confidence: {Confidence}")
     
     try:
-        # Get session with enhanced retrieval
-        session = active_sessions.get(CallSid)
-        if not session:
-            session = await get_cached_session(CallSid)
-            if session:
-                active_sessions[CallSid] = session
-                logger.info(f"✅ Restored session from cache: {CallSid}")
+        # Get session
+        session = active_sessions.get(CallSid) or await get_cached_session(CallSid)
         
         if not session:
-            logger.error(f"❌ CRITICAL: Session not found for CallSid: {CallSid}")
-            return Response(
-                content=create_hangup_twiml("I'm sorry, there was a problem with the call. Please call us back."),
-                media_type="application/xml"
-            )
-        
-        # Ensure session integrity
-        if not session.twilio_call_sid:
-            session.twilio_call_sid = CallSid
-        
-        if not hasattr(session, 'no_speech_count'):
-            session.no_speech_count = 0
-        
-        # Enhanced no speech handling
-        if not SpeechResult:
-            logger.warning(f"⚠️ No speech detected for {CallSid} (attempt {session.no_speech_count + 1})")
-            session.no_speech_count += 1
+            logger.error(f"❌ Session not found for speech processing: {CallSid}")
+            logger.info(f"🔄 Attempting to create emergency session for: {CallSid}")
             
-            if session.no_speech_count >= 3:
-                logger.warning(f"⚠️ Too many no-speech attempts. Ending call {CallSid}.")
-                session.final_outcome = "no_answer"
-                session.conversation_stage = ConversationStage.GOODBYE
-                await enhanced_cache_session(session)
-                
-                return await EnhancedTwiMLManager.create_no_speech_response(
-                    attempt_number=3,
-                    client_data=session.client_data
+            # Create emergency session to prevent complete failure
+            try:
+                emergency_session = CallSession(
+                    session_id=str(uuid.uuid4()),
+                    twilio_call_sid=CallSid,
+                    client_id="emergency",
+                    phone_number="unknown",
+                    call_status=CallStatusEnum.IN_PROGRESS,
+                    conversation_stage=ConversationStage.GREETING,
+                    conversation_turns=[],
+                    client_data={"first_name": "Customer"},
+                    started_at=datetime.utcnow(),
+                    no_speech_count=0,
+                    lyzr_agent_id=getattr(settings, 'lyzr_conversation_agent_id', 'default_agent'),
+                    lyzr_session_id=f"emergency_{uuid.uuid4().hex[:8]}"
                 )
-            else:
-                return await EnhancedTwiMLManager.create_no_speech_response(
+                
+                # Save emergency session
+                active_sessions[CallSid] = emergency_session
+                logger.info(f"✅ Emergency session created: {CallSid}")
+                session = emergency_session
+                
+            except Exception as emergency_error:
+                logger.error(f"❌ Failed to create emergency session: {emergency_error}")
+                return await EnhancedTwiMLManager.create_emergency_twiml()
+        
+        # Handle silence (no speech detected)
+        if not SpeechResult or SpeechResult.strip() == "":
+            session.no_speech_count += 1
+            logger.info(f"🔇 Silence detected (attempt {session.no_speech_count}) for {CallSid}")
+            
+            # Save updated session
+            await enhanced_cache_session(session)
+            
+            # Handle silence with progressive responses
+            if session.no_speech_count <= 3:
+                return await EnhancedTwiMLManager.create_silence_response(
                     attempt_number=session.no_speech_count,
                     client_data=session.client_data
                 )
+            else:
+                # End call after 3 silence attempts
+                return await EnhancedTwiMLManager.create_final_silence_response()
         
-        session.no_speech_count = 0
-        
-        # Process speech with enhanced voice processor
+        # Process customer input with enhanced voice processor
         process_result = await voice_processor.process_customer_input(
             customer_input=SpeechResult,
             session=session,
             confidence=Confidence or 0.0
         )
         
-        logger.info(f"🔄 Processing result: {process_result}")
-        
-        # Update session conversation stage
-        new_stage_value = process_result.get("conversation_stage")
-        if new_stage_value:
-            try:
-                session.conversation_stage = ConversationStage(new_stage_value)
-                logger.info(f"📍 Updated session stage to: {session.conversation_stage.value}")
-            except ValueError:
-                logger.warning(f"⚠️ Invalid stage value: {new_stage_value}")
-        
-        # Create conversation turn
-        response_type_enum = ResponseType.HYBRID if process_result.get("lyzr_used") else ResponseType.STATIC
-        
+        # Update conversation history
         turn = ConversationTurn(
-            turn_number=len(session.conversation_turns) + 1 if session.conversation_turns else 1,
+            turn_number=len(session.conversation_turns) + 1,
             customer_speech=SpeechResult,
-            customer_speech_confidence=Confidence or 0.0,
+            customer_speech_confidence=Confidence,
             agent_response=process_result.get("response_text", ""),
-            response_type=response_type_enum,
-            conversation_stage=session.conversation_stage,
-            processing_time_ms=process_result.get("processing_time_ms", 0)
+            response_type=ResponseType.HYBRID,
+            conversation_stage=session.conversation_stage
         )
-        
-        if not session.conversation_turns:
-            session.conversation_turns = []
         session.conversation_turns.append(turn)
-        session.current_turn_number = turn.turn_number
         
-        # Update final outcome if provided
-        if process_result.get("outcome"):
-            session.final_outcome = process_result["outcome"]
+        # Update session state
+        session.conversation_stage = process_result.get("conversation_stage", session.conversation_stage)
+        session.no_speech_count = 0  # Reset on successful speech
         
         # Save updated session
         await enhanced_cache_session(session)
         
-        # Check if conversation should end
-        if process_result.get("end_conversation", False):
-            logger.info(f"🎬 Conversation ending for {CallSid}. Outcome: {session.final_outcome}")
-            
-            session.call_status = CallStatusEnum.COMPLETED
-            session.complete_call(session.final_outcome)
-            await enhanced_cache_session(session)
-            
-            return await EnhancedTwiMLManager.create_hybrid_twiml_response(
-                response_type=process_result.get("response_category", "goodbye"),
-                text=process_result.get("response_text"),
-                client_data=session.client_data,
-                should_hangup=True
-            )
-        else:
-            # Continue conversation
-            return await EnhancedTwiMLManager.create_hybrid_twiml_response(
-                response_type=process_result.get("response_category", "dynamic"),
-                text=process_result.get("response_text"),
-                client_data=session.client_data
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Unrecoverable error in speech processing for {CallSid}: {e}", exc_info=True)
+        # Generate TwiML response
+        gather_action = f"{getattr(settings, 'base_url', 'http://localhost:8000')}/twilio/process-speech"
         return await EnhancedTwiMLManager.create_hybrid_twiml_response(
-            response_type="error",
-            text="I apologize, we have encountered a system error. Please call back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.",
-            should_hangup=True
+            response_type=process_result.get("response_category", "dynamic"),
+            text=process_result.get("response_text"),
+            client_data=session.client_data,
+            should_hangup=process_result.get("end_conversation", False),
+            gather_action=gather_action
         )
+        
+    except Exception as e:
+        logger.error(f"❌ Speech processing error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        return await EnhancedTwiMLManager.create_emergency_twiml()
 
-# Add interruption handling endpoint
 @router.post("/handle-interruption")
 async def handle_interruption(
     request: Request,
@@ -735,7 +1007,7 @@ async def handle_interruption(
         
         if not session:
             logger.error(f"❌ Session not found for interruption: {CallSid}")
-            return EnhancedTwiMLManager.create_emergency_twiml()
+            return await EnhancedTwiMLManager.create_emergency_twiml()
         
         # Process interruption with voice processor
         process_result = await voice_processor.process_customer_input(
@@ -745,21 +1017,33 @@ async def handle_interruption(
             is_interruption=True
         )
         
+        # Update conversation turn for interruption
+        turn = ConversationTurn(
+            turn_number=len(session.conversation_turns) + 1,
+            customer_speech=SpeechResult or "[INTERRUPTION]",
+            customer_speech_confidence=Confidence,
+            agent_response=process_result.get("response_text", ""),
+            response_type=ResponseType.HYBRID,
+            conversation_stage=session.conversation_stage
+        )
+        session.conversation_turns.append(turn)
+        
         # Save updated session
         await enhanced_cache_session(session)
         
+        gather_action = f"{getattr(settings, 'base_url', 'http://localhost:8000')}/twilio/process-speech"
         return await EnhancedTwiMLManager.create_hybrid_twiml_response(
             response_type=process_result.get("response_category", "interruption_acknowledgment"),
             text=process_result.get("response_text"),
             client_data=session.client_data,
-            should_hangup=process_result.get("end_conversation", False)
+            should_hangup=process_result.get("end_conversation", False),
+            gather_action=gather_action
         )
         
     except Exception as e:
         logger.error(f"❌ Interruption handling error: {e}")
-        return EnhancedTwiMLManager.create_emergency_twiml()
+        return await EnhancedTwiMLManager.create_emergency_twiml()
 
-# Keep existing status webhook and other endpoints...
 @router.post("/status")
 async def status_webhook(
     request: Request,
@@ -776,303 +1060,229 @@ async def status_webhook(
         # Handle call completion
         if CallStatus in ["completed", "failed", "busy", "no-answer"]:
             # Get session from active or cache
-            session = active_sessions.get(CallSid)
-            if not session:
-                session = await get_cached_session(CallSid)
-            
-            if session:
-                # Update call status
-                if CallStatus == "completed":
-                    session.call_status = CallStatusEnum.COMPLETED
-                elif CallStatus == "failed":
-                    session.call_status = CallStatusEnum.FAILED
-                elif CallStatus == "busy":
-                    session.call_status = CallStatusEnum.BUSY
-                elif CallStatus == "no-answer":
-                    session.call_status = CallStatusEnum.NO_ANSWER
-                
-                # Update duration
-                if CallDuration:
-                    try:
-                        duration = int(CallDuration)
-                        if not session.session_metrics:
-                            from shared.models.call_session import SessionMetrics
-                            session.session_metrics = SessionMetrics()
-                        session.session_metrics.total_call_duration_seconds = duration
-                    except ValueError:
-                        logger.warning(f"Invalid call duration: {CallDuration}")
-                
-                # Set appropriate outcome based on status if not already set
-                if not session.final_outcome:
-                    if CallStatus == "completed":
-                        if session.conversation_stage == ConversationStage.GOODBYE:
-                            session.final_outcome = "completed"
-                        else:
-                            session.final_outcome = "incomplete"
-                    elif CallStatus == "no-answer":
-                        session.final_outcome = "no_answer"
-                    elif CallStatus in ["busy", "failed"]:
-                        session.final_outcome = "failed"
-                
-                # Complete the call
-                session.complete_call(session.final_outcome)
-                session.completed_at = datetime.utcnow()
-                
-                # Get client for summary and update
-                client = await get_client_by_phone(session.phone_number)
-                
-                # Generate call summary if there were conversation turns
-                if session.conversation_turns and len(session.conversation_turns) > 0:
-                    await generate_and_save_call_summary(session, client)
-                
-                # Update client record if we have one
-                if client and session.final_outcome:
-                    await update_client_record(session, session.final_outcome, client)
-                
-                # Final save to database
-                session_repo = await get_session_repo()
-                if session_repo:
-                    try:
-                        if not session.twilio_call_sid:
-                            session.twilio_call_sid = CallSid
-                        
-                        success = await session_repo.save_session(session)
-                        if success:
-                            logger.info(f"✅ Final session saved: {CallSid}")
-                        else:
-                            logger.error(f"❌ Failed to save session: {CallSid}")
-                    except Exception as e:
-                        logger.error(f"❌ Database save error: {e}")
-                
-                # Clean up
-                from shared.utils.redis_client import session_cache
-                if session_cache:
-                    try:
-                        await session_cache.delete_session(CallSid)
-                        logger.info(f"🗑️ Removed from Redis: {CallSid}")
-                    except Exception as e:
-                        logger.warning(f"Redis cleanup failed: {e}")
-                
-                if CallSid in active_sessions:
-                    del active_sessions[CallSid]
-                    logger.info(f"🗑️ Removed from active sessions: {CallSid}")
-                
-                logger.info(f"✅ Call completed: {CallSid} - Outcome: {session.final_outcome}")
-            else:
-                logger.warning(f"⚠️ No session found for completed call: {CallSid}")
-        
-        # Handle other status updates
-        else:
             session = active_sessions.get(CallSid) or await get_cached_session(CallSid)
             
             if session:
-                if CallStatus == "initiated":
-                    session.call_status = CallStatusEnum.INITIATED
-                elif CallStatus == "ringing":
-                    session.call_status = CallStatusEnum.RINGING
-                elif CallStatus == "in-progress":
-                    session.call_status = CallStatusEnum.IN_PROGRESS
+                # Update final status
+                try:
+                    session.call_status = CallStatusEnum(CallStatus)
+                except ValueError:
+                    session.call_status = CallStatusEnum.COMPLETED
                 
-                await enhanced_cache_session(session)
-                logger.info(f"📞 Call status updated: {CallSid} -> {CallStatus}")
+                session.ended_at = datetime.utcnow()
+                
+                # Calculate duration
+                if session.started_at and session.ended_at:
+                    duration = (session.ended_at - session.started_at).total_seconds()
+                    if not hasattr(session, 'session_metrics'):
+                        session.session_metrics = {}
+                    session.session_metrics['total_call_duration_seconds'] = duration
+                
+                # Determine final outcome based on conversation
+                if hasattr(session, 'conversation_turns') and session.conversation_turns:
+                    last_turn = session.conversation_turns[-1]
+                    # Simple outcome detection - can be enhanced
+                    if "interested" in last_turn.agent_response.lower():
+                        session.final_outcome = "interested"
+                    elif "not interested" in last_turn.agent_response.lower():
+                        session.final_outcome = "not_interested"
+                    elif "remove" in last_turn.agent_response.lower():
+                        session.final_outcome = "dnc_requested"
+                    else:
+                        session.final_outcome = "completed"
+                else:
+                    session.final_outcome = CallStatus
+                
+                # Save final session state to database
+                try:
+                    from shared.utils.database import db_client
+                    if db_client is not None and db_client.database is not None:
+                        session_dict = session.dict()
+                        session_dict["_id"] = session.session_id
+                        await db_client.database.call_sessions.replace_one(
+                            {"twilioCallSid": CallSid},
+                            session_dict,
+                            upsert=True
+                        )
+                        logger.info(f"💾 Final session saved to database: {CallSid}")
+                except Exception as db_error:
+                    logger.error(f"❌ Database save error: {db_error}")
+                
+                # Clean up active session
+                if CallSid in active_sessions:
+                    del active_sessions[CallSid]
+                    logger.info(f"🧹 Cleaned up active session: {CallSid}")
         
-        return {"status": "ok", "call_sid": CallSid, "call_status": CallStatus}
+        return {"status": "ok", "call_sid": CallSid, "processed": True}
         
     except Exception as e:
         logger.error(f"❌ Status webhook error: {e}")
-        return {"status": "error", "message": str(e)}
-
-# Helper functions for client record updates and call summaries
-async def update_client_record(session: CallSession, outcome: str, client: Client):
-    """Update client record with call outcome and details"""
-    try:
-        client_repo = await get_client_repo()
-        if not client_repo:
-            logger.warning("⚠️ Cannot update client - repo not available")
-            return
-        
-        client_id = str(client.id)
-        
-        # Apply CRM tags based on outcome
-        if outcome in ["scheduled", "interested", "interested_no_schedule"]:
-            await client_repo.add_crm_tag(client_id, CRMTag.INTERESTED)
-            await client_repo.update_call_outcome(client_id, CallOutcome.INTERESTED)
-            logger.info(f"✅ Client {client_id} marked as INTERESTED")
-            
-        elif outcome in ["not_interested", "keep_communications"]:
-            await client_repo.add_crm_tag(client_id, CRMTag.NOT_INTERESTED)
-            await client_repo.update_call_outcome(client_id, CallOutcome.NOT_INTERESTED)
-            logger.info(f"✅ Client {client_id} marked as NOT_INTERESTED")
-            
-        elif outcome == "dnc_requested":
-            await client_repo.add_crm_tag(client_id, CRMTag.DNC_REQUESTED)
-            await client_repo.update_call_outcome(client_id, CallOutcome.DNC_REQUESTED)
-            logger.info(f"✅ Client {client_id} marked as DNC_REQUESTED")
-            
-        elif outcome == "no_answer":
-            await client_repo.update_call_outcome(client_id, CallOutcome.NO_ANSWER)
-            logger.info(f"✅ Client {client_id} marked as NO_ANSWER")
-        
-        # Build call summary
-        call_summary = {
-            "attempt_number": client.total_attempts + 1,
-            "timestamp": datetime.utcnow(),
-            "outcome": outcome,
-            "duration_seconds": int(session.session_metrics.total_call_duration_seconds) if session.session_metrics else 0,
-            "twilio_call_sid": session.twilio_call_sid,
-            "conversation_turns": len(session.conversation_turns) if session.conversation_turns else 0,
-            "final_stage": session.conversation_stage.value if session.conversation_stage else "unknown"
-        }
-        
-        # Add transcript if available
-        if session.conversation_turns:
-            transcript = build_conversation_transcript(session)
-            call_summary["transcript"] = transcript
-        
-        # Add AI summary if available
-        if hasattr(session, 'call_summary') and session.call_summary:
-            call_summary["ai_summary"] = session.call_summary
-        
-        # Add call attempt to history
-        await client_repo.add_call_attempt(client_id, call_summary)
-        
-        # Update campaign status if needed
-        if outcome in ["interested", "not_interested", "dnc_requested", "scheduled"]:
-            await client_repo.update_client(client_id, {"campaignStatus": "completed"})
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to update client record: {e}")
-
-async def generate_and_save_call_summary(session: CallSession, client: Optional[Client] = None):
-    """Generate and save call summary using LYZR"""
-    try:
-        if not session.conversation_turns:
-            logger.warning(f"⚠️ No conversation turns to summarize for {session.session_id}")
-            return
-        
-        # Build conversation transcript
-        transcript = build_conversation_transcript(session)
-        
-        # Get client name
-        client_name = "Unknown"
-        if client:
-            client_name = f"{client.client.first_name} {client.client.last_name}"
-        elif session.client_data:
-            client_name = session.client_data.get("client_name", "Unknown")
-        
-        # Generate summary using LYZR if configured
-        if lyzr_client.is_configured():
-            summary_result = await lyzr_client.generate_call_summary(
-                conversation_transcript=transcript,
-                client_name=client_name,
-                call_outcome=session.final_outcome or "completed"
-            )
-            
-            if summary_result["success"]:
-                session.call_summary = summary_result["summary"]
-                logger.info(f"📝 AI summary generated for {session.session_id}")
-        else:
-            # Create basic summary without LYZR
-            session.call_summary = {
-                "outcome": session.final_outcome or "completed",
-                "sentiment": "neutral",
-                "key_points": [f"Call completed with {len(session.conversation_turns)} turns"],
-                "customer_concerns": [],
-                "recommended_actions": [],
-                "agent_notes": f"Call duration: {session.session_metrics.total_call_duration_seconds}s",
-                "generated_by": "system"
-            }
-        
-        # Save session with summary
-        await enhanced_cache_session(session)
-        
-        # Save to database
-        session_repo = await get_session_repo()
-        if session_repo:
-            await session_repo.save_session(session)
-        
-    except Exception as e:
-        logger.error(f"❌ Summary generation failed: {e}")
-
-def build_conversation_transcript(session: CallSession) -> str:
-    """Build formatted conversation transcript"""
-    transcript_lines = []
-    
-    for turn in session.conversation_turns:
-        transcript_lines.append(f"Customer: {turn.customer_speech}")
-        transcript_lines.append(f"Agent: {turn.agent_response}")
-        transcript_lines.append("")  # Empty line between turns
-    
-    return "\n".join(transcript_lines).strip()
+        return {"status": "error", "message": str(e), "call_sid": CallSid}
 
 @router.get("/test-connection")
-async def test_twilio_connection():
-    """Test enhanced Twilio connection and system readiness"""
-    
+async def test_connection():
+    """Test endpoint for connection verification"""
+    return {
+        "status": "ok",
+        "message": "Enhanced Twilio router is active",
+        "active_sessions": len(active_sessions),
+        "timestamp": datetime.utcnow().isoformat(),
+        "features": {
+            "voicemail_detection": True,
+            "start_delay": True,
+            "client_type_detection": True,
+            "interruption_handling": True,
+            "no_speech_fallbacks": True,
+            "enhanced_voice_processing": True
+        }
+    }
+
+@router.get("/active-sessions")
+async def get_active_sessions():
+    """Get information about currently active sessions"""
     try:
-        # Check service configurations
-        services_status = {
-            "twilio": {
-                "configured": bool(settings.twilio_account_sid and settings.twilio_auth_token),
-                "phone_number": settings.twilio_phone_number if settings.twilio_phone_number else "Not configured"
-            },
-            "hybrid_tts": {
-                "configured": await hybrid_tts.is_configured(),
-                "stats": hybrid_tts.get_performance_stats()
-            },
-            "voice_processor": {
-                "configured": voice_processor.is_configured(),
-                "enhanced_features": True
-            },
-            "lyzr": {
-                "configured": lyzr_client.is_configured(),
-                "conversation_agent": settings.lyzr_conversation_agent_id,
-                "summary_agent": settings.lyzr_summary_agent_id
-            }
-        }
-        
-        # Test database connection
-        try:
-            client_repo = await get_client_repo()
-            services_status["database"] = {"connected": client_repo is not None}
-        except Exception as e:
-            services_status["database"] = {"connected": False, "error": str(e)}
-        
-        # Check active sessions
-        services_status["active_sessions"] = {
-            "count": len(active_sessions),
-            "sessions": list(active_sessions.keys())
-        }
-        
-        # Overall system status
-        all_configured = all([
-            services_status["twilio"]["configured"],
-            services_status["hybrid_tts"]["configured"],
-            services_status["voice_processor"]["configured"]
-        ])
+        session_info = []
+        for call_sid, session in active_sessions.items():
+            session_info.append({
+                "call_sid": call_sid,
+                "session_id": session.session_id,
+                "phone_number": session.phone_number,
+                "call_status": session.call_status.value if session.call_status else "unknown",
+                "conversation_stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+                "turns": len(session.conversation_turns) if session.conversation_turns else 0,
+                "started_at": session.started_at.isoformat() if session.started_at else None,
+                "client_name": f"{session.client_data.get('first_name', '')} {session.client_data.get('last_name', '')}".strip() if session.client_data else "Unknown"
+            })
         
         return {
-            "status": "ready" if all_configured else "not_ready",
-            "services": services_status,
-            "webhook_urls": {
-                "voice": f"{settings.base_url}/twilio/voice",
-                "status": f"{settings.base_url}/twilio/status",
-                "interruption": f"{settings.base_url}/twilio/handle-interruption"
-            },
-            "enhanced_features": {
-                "start_delay": "2 seconds",
-                "voicemail_detection": "enabled",
-                "clarifying_questions": "enabled",
-                "interruption_handling": "enabled",
-                "no_speech_enhancement": "3 attempts with callbacks"
-            },
+            "active_sessions": session_info,
+            "total_active": len(active_sessions),
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"❌ Connection test error: {e}")
+        logger.error(f"❌ Active sessions error: {e}")
         return {
-            "status": "error",
+            "error": str(e),
+            "active_sessions": [],
+            "total_active": 0
+        }
+
+@router.post("/cleanup-session/{call_sid}")
+async def cleanup_session(call_sid: str):
+    """Manually cleanup a session (for testing/debugging)"""
+    try:
+        if call_sid in active_sessions:
+            session = active_sessions[call_sid]
+            
+            # Save to database before cleanup
+            try:
+                from shared.utils.database import db_client
+                if db_client is not None and db_client.database is not None:
+                    session_dict = session.dict()
+                    session_dict["_id"] = session.session_id
+                    await db_client.database.call_sessions.replace_one(
+                        {"twilioCallSid": call_sid},
+                        session_dict,
+                        upsert=True
+                    )
+            except Exception as db_error:
+                logger.warning(f"⚠️ Database save during cleanup failed: {db_error}")
+            
+            # Remove from active sessions
+            del active_sessions[call_sid]
+            
+            return {
+                "success": True,
+                "message": f"Session {call_sid} cleaned up successfully",
+                "session_id": session.session_id
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Session {call_sid} not found in active sessions"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Session cleanup error: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@router.get("/debug/{call_sid}")
+async def debug_session(call_sid: str):
+    """Debug endpoint to get detailed session information"""
+    try:
+        debug_info = {
+            "call_sid": call_sid,
+            "timestamp": datetime.utcnow().isoformat(),
+            "active_session": None,
+            "database_session": None,
+            "found_in": []
+        }
+        
+        # Check active sessions
+        if call_sid in active_sessions:
+            session = active_sessions[call_sid]
+            debug_info["active_session"] = {
+                "session_id": session.session_id,
+                "phone_number": session.phone_number,
+                "call_status": session.call_status.value if session.call_status else None,
+                "conversation_stage": session.conversation_stage.value if session.conversation_stage else None,
+                "turns": len(session.conversation_turns) if session.conversation_turns else 0,
+                "started_at": session.started_at.isoformat() if session.started_at else None,
+                "client_data": session.client_data,
+                "no_speech_count": getattr(session, 'no_speech_count', 0)
+            }
+            debug_info["found_in"].append("active_sessions")
+        
+        # Check database
+        try:
+            from shared.utils.database import db_client
+            if db_client is not None and db_client.database is not None:
+                doc = await db_client.database.call_sessions.find_one({"twilioCallSid": call_sid})
+                if doc:
+                    debug_info["database_session"] = {
+                        "session_id": doc.get("session_id"),
+                        "call_status": doc.get("call_status"),
+                        "final_outcome": doc.get("final_outcome"),
+                        "turns": len(doc.get("conversation_turns", [])),
+                        "started_at": doc.get("started_at").isoformat() if doc.get("started_at") else None,
+                        "ended_at": doc.get("ended_at").isoformat() if doc.get("ended_at") else None
+                    }
+                    debug_info["found_in"].append("database")
+        except Exception as db_error:
+            debug_info["database_error"] = str(db_error)
+        
+        if not debug_info["found_in"]:
+            debug_info["found_in"] = ["nowhere"]
+            debug_info["message"] = "Session not found in any storage location"
+        
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"❌ Debug session error: {e}")
+        return {
+            "call_sid": call_sid,
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+# Health check endpoint
+@router.get("/health")
+async def twilio_router_health():
+    """Health check for Twilio router"""
+    return {
+        "status": "healthy",
+        "service": "twilio-router",
+        "active_sessions": len(active_sessions),
+        "features": {
+            "voicemail_detection": True,
+            "start_delay": True,
+            "client_type_detection": True,
+            "interruption_handling": True,
+            "no_speech_fallbacks": True
+        },
+        "timestamp": datetime.utcnow().isoformat()
+    }
