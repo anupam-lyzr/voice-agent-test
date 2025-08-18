@@ -99,12 +99,9 @@ class HybridTTSService:
                 else:
                     template_name = "default_greeting"
             else:  # voicemail
-                if client_type == ClientType.NON_MEDICARE:
-                    template_name = "non_medicare_voicemail"
-                elif client_type == ClientType.MEDICARE:
-                    template_name = "medicare_voicemail"
-                else:
-                    template_name = "default_voicemail"
+                # Use the standard voicemail template for all client types
+                # The client type will be passed in context for script selection
+                template_name = "voicemail"
             
             # Try segmented audio first
             segmented_result = await self.segmented_audio.get_personalized_audio(

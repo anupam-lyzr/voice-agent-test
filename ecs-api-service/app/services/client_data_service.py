@@ -89,17 +89,16 @@ class ClientDataService:
         """Analyze tags to determine client type and agent"""
         
         if not tags:
-            return ClientType.UNKNOWN, None
+            return ClientType.NON_MEDICARE, None  # Default to Non-Medicare if no tags
         
         tags_lower = tags.lower().strip()
         
         # Determine client type
         if "aag - medicare client" in tags_lower:
             client_type = ClientType.MEDICARE
-        elif any(agent_prefix in tags_lower for agent_prefix in ["ab - anthony", "ab - hineth", "ab - india", "ab - keith", "ab - lashawn"]):
-            client_type = ClientType.NON_MEDICARE
         else:
-            client_type = ClientType.UNKNOWN
+            # All other clients (including "AB - [Agent Name]" tags and any other tags) are Non-Medicare
+            client_type = ClientType.NON_MEDICARE
         
         # Extract agent information
         agent_info = None
@@ -115,30 +114,24 @@ class ClientDataService:
         
         if client_type == ClientType.NON_MEDICARE:
             return "non_medicare_script"
-        elif client_type == ClientType.MEDICARE:
-            return "medicare_script"  # For future use
-        else:
-            return "default_script"
+        else:  # Medicare
+            return "medicare_script"
     
     def _get_greeting_template(self, client_type: ClientType) -> str:
         """Get the appropriate greeting template"""
         
         if client_type == ClientType.NON_MEDICARE:
             return "non_medicare_greeting"
-        elif client_type == ClientType.MEDICARE:
-            return "medicare_greeting"  # For future use
-        else:
-            return "default_greeting"
+        else:  # Medicare
+            return "medicare_greeting"
     
     def _get_voicemail_template(self, client_type: ClientType) -> str:
         """Get the appropriate voicemail template"""
         
         if client_type == ClientType.NON_MEDICARE:
             return "non_medicare_voicemail"
-        elif client_type == ClientType.MEDICARE:
-            return "medicare_voicemail"  # For future use
-        else:
-            return "default_voicemail"
+        else:  # Medicare
+            return "medicare_voicemail"
     
     def _get_fallback_client_data(self, original_data: Dict[str, Any]) -> Dict[str, Any]:
         """Provide fallback client data structure"""
@@ -150,13 +143,13 @@ class ClientDataService:
             "phone": original_data.get("phone", ""),
             "email": original_data.get("email", ""),
             "tags": original_data.get("tags", ""),
-            "client_type": ClientType.UNKNOWN,
+            "client_type": ClientType.NON_MEDICARE,  # Default to Non-Medicare
             "is_medicare_client": False,
-            "is_non_medicare_client": False,
+            "is_non_medicare_client": True,
             "agent_info": None,
-            "script_type": "default_script",
-            "greeting_template": "default_greeting", 
-            "voicemail_template": "default_voicemail"
+            "script_type": "non_medicare_script",
+            "greeting_template": "non_medicare_greeting", 
+            "voicemail_template": "non_medicare_voicemail"
         }
     
     def get_scripts_for_client_type(self, client_type: ClientType) -> Dict[str, str]:
@@ -178,24 +171,17 @@ class ClientDataService:
                 
                 "keep_communications": "Great! We'll keep you in the loop with helpful health insurance updates throughout the year. If you ever need assistance, just reach out - we're always here to help, and our service is always free. Thank you for your time today!",
                 
-                "voicemail": "Hello {client_name}, Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!"
+                "voicemail": "Hello {client_name}, Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8 3 3, 2 2 7, 8 5 0 0. We look forward to hearing from you - take care!"
             }
         
         elif client_type == ClientType.MEDICARE:
-            # Future Medicare scripts can go here
             return {
-                "greeting": "Hello {client_name}, this is Alex from Altruis Advisor Group. We've helped you with your Medicare needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+                "greeting": "Hello {client_name}, Alex here from Altruis Advisor Group, we've helped you with your health insurance needs in the past and I just wanted to reach real to see if we can be of service to you this year during Open Enrollment? A simple 'Yes' or 'No' is fine, and remember, our services are completely free of charge",
                 
-                "voicemail": "Hello {client_name}, Alex here from Altruis Advisor Group. We've helped with your Medicare needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. Please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!"
+                "voicemail": "Hello {client_name}, Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8 3 3, 2 2 7, 8 5 0 0. We look forward to hearing from you - take care!"
             }
         
-        else:
-            # Default/fallback scripts
-            return {
-                "greeting": "Hello {client_name}, this is Alex from Altruis Advisor Group. We've helped you with your insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
-                
-                "voicemail": "Hello {client_name}, Alex here from Altruis Advisor Group. We've helped with your insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. Please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!"
-            }
+
     
     def format_script_with_data(self, script_template: str, client_data: Dict[str, Any]) -> str:
         """Format script template with actual client data"""
