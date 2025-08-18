@@ -26,8 +26,8 @@ from services.elevenlabs_client import elevenlabs_client
 
 logger = logging.getLogger(__name__)
 
-# Directory setup
-OUTPUT_DIR = Path("audio-generation")
+# Directory setup - Generate in the app directory, not scripts directory
+OUTPUT_DIR = Path("../audio-generation")
 SEGMENTS_DIR = OUTPUT_DIR / "segments"
 CLIENT_NAMES_DIR = OUTPUT_DIR / "names" / "clients"
 AGENT_NAMES_DIR = OUTPUT_DIR / "names" / "agents"
@@ -79,17 +79,17 @@ SCRIPT_SEGMENTS = {
     # NOT INTERESTED START (shared)
     "not_interested_start": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
     
-    # VOICEMAIL SEGMENTS - Non-Medicare version
+    # VOICEMAIL SEGMENTS - Non-Medicare version (Updated)
     "non_medicare_voicemail_start": "Hello ",
     "non_medicare_voicemail_middle": f", Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
     
-    # VOICEMAIL SEGMENTS - Medicare version (for future use)
+    # VOICEMAIL SEGMENTS - Medicare version (Updated)
     "medicare_voicemail_start": "Hello ",
-    "medicare_voicemail_middle": f", Alex here from Altruis Advisor Group. We've helped with your Medicare needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. Please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
+    "medicare_voicemail_middle": f", Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
     
-    # DEFAULT VOICEMAIL
+    # DEFAULT VOICEMAIL (Updated)
     "default_voicemail_start": "Hello ",
-    "default_voicemail_middle": f", Alex here from Altruis Advisor Group. We've helped with your insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. Please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
+    "default_voicemail_middle": f", Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
     
     # STATIC RESPONSES (no concatenation needed)
     "goodbye": "Thank you for your time today. Have a wonderful day!",

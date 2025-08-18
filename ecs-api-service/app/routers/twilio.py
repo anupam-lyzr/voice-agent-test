@@ -64,13 +64,11 @@ class EnhancedTwiMLManager:
                 if tts_result.get("success") and tts_result.get("audio_url"):
                     audio_url = tts_result["audio_url"]
                     
-                    # TwiML with 2-second pause before greeting
+                    # TwiML without delay for faster response
                     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Pause length="2"/>
     <Play>{audio_url}</Play>
     <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
-        <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
     <Pause length="1"/>
@@ -105,10 +103,8 @@ class EnhancedTwiMLManager:
             
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Pause length="2"/>
     <Say voice="{MALE_VOICE}">{greeting_text}</Say>
     <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
-        <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
     <Pause length="1"/>
@@ -126,10 +122,8 @@ class EnhancedTwiMLManager:
             
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Pause length="2"/>
     <Say voice="{MALE_VOICE}">{emergency_greeting}</Say>
     <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto">
-        <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
     <Hangup/>
