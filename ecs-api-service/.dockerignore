@@ -1,0 +1,22 @@
+# Exclude large audio files from build context (but keep directory structure)
+app/audio-generation/segments/*
+app/audio-generation/names/clients/*
+app/audio-generation/names/agents/*
+app/audio-generation/concatenated_cache/*
+
+# Exclude other large files
+*.wav
+*.mp3
+*.m4a
+*.flac
+
+# Exclude cache and temp files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+*.log

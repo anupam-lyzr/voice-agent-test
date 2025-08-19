@@ -1,29 +1,40 @@
-# Use Alpine base image to save disk space
-FROM python:3.11-alpine
+# Multi-stage build to optimize space usage
+FROM python:3.11-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies
+# Install build dependencies
 RUN apk update && \
     apk add --no-cache \
-        curl \
-        ffmpeg \
         gcc \
         musl-dev \
         python3-dev \
         libffi-dev \
         openssl-dev
 
+# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Final stage
+FROM python:3.11-alpine
+
+WORKDIR /app
+
+# Install runtime dependencies only
+RUN apk update && \
+    apk add --no-cache \
+        curl \
+        ffmpeg
+
+# Copy Python packages from builder stage
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY app/ .
 
-# Copy your audio-generation directory with all audio files
-COPY app/audio-generation /app/audio-generation
-
-# Ensure directories exist
+# Create necessary directories
 RUN mkdir -p static/audio/temp \
     audio-generation/segments \
     audio-generation/names/clients \
