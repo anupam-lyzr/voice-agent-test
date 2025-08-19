@@ -1,17 +1,15 @@
-# In your API service Dockerfile
-FROM python:3.11-slim
+# Use a larger base image to avoid disk space issues
+FROM python:3.11
 
 WORKDIR /app
 
-# Install dependencies with space optimization
+# Install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential \
         curl \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    && apt-get autoremove -y
+    && apt-get clean
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
