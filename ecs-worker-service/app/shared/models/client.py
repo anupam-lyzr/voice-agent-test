@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
+from .custom_types import PyObjectId
 
 class CampaignStatus(str, Enum):
     """Campaign status for each client"""
@@ -132,7 +133,7 @@ class AgentAssignment(BaseModel):
 class Client(BaseModel):
     """Complete client record with call history"""
     # MongoDB document ID
-    id: Optional[str] = Field(None, alias="_id", description="MongoDB document ID")
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     
     # Core client information
     client: ClientInfo = Field(..., description="Basic client information")
@@ -223,12 +224,44 @@ class Client(BaseModel):
         answered_calls = sum(1 for attempt in self.call_history 
                            if attempt.outcome in [CallOutcome.ANSWERED, CallOutcome.INTERESTED, CallOutcome.NOT_INTERESTED])
         return answered_calls / len(self.call_history)
-    
+
+    def get_latest_call_outcome(self) -> Optional[str]:
+        """Get the latest call outcome"""
+        if self.call_history:
+            latest_call = self.call_history[-1]
+            return latest_call.get("outcome")
+        return None
+      
     class Config:
         populate_by_name = True
         json_encoders = {
             datetime: lambda v: v.isoformat()
         }
+
+class ClientCreate(BaseModel):
+    """Model for creating a new client"""
+    client: ClientInfo = Field(..., description="Basic client information")
+    campaign_status: CampaignStatus = Field(default=CampaignStatus.PENDING, description="Initial campaign status")
+    is_test_client: bool = Field(default=False, description="Whether this is a test client")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+class ClientUpdate(BaseModel):
+    """Model for updating an existing client"""
+    client: Optional[ClientInfo] = None
+    campaign_status: Optional[CampaignStatus] = None
+    crm_tags: Optional[List[CRMTag]] = None
+    agent_assignment: Optional[AgentAssignment] = None
+    current_summary: Optional[CallSummary] = None
+    metadata: Optional[Dict[str, Any]] = None
+    is_test_client: Optional[bool] = None
+
+class ClientAssignment(BaseModel):
+    """Model for agent assignment operations"""
+    agent_id: str = Field(..., description="Agent ID to assign")
+    assignment_reason: str = Field(default="interested", description="Reason for assignment")
+    meeting_scheduled: Optional[datetime] = Field(None, description="Scheduled meeting time")
+    meeting_status: str = Field(default="pending", description="Meeting status")
+    calendar_event_id: Optional[str] = Field(None, description="Google Calendar event ID")
 
 class ClientSearchFilter(BaseModel):
     """Filters for searching clients"""

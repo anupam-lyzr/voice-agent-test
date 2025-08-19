@@ -783,6 +783,10 @@ async def close_database():
     logger.info("Database connection closed")
 
 # Utility functions for easy access
+def get_database() -> DatabaseClient:
+    """Get database client instance"""
+    return db_client
+
 async def get_client_by_phone(phone: str) -> Optional[Client]:
     """Get client by phone number"""
     if not client_repo:

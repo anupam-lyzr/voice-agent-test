@@ -19,32 +19,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import services with fallbacks
+# Import services with fallbacks - will be done after database initialization
 services_available = False
-try:
-    logger.info("🔍 Attempting to import worker services...")
-    from services.campaign_processor import CampaignProcessor
-    logger.info("✅ CampaignProcessor imported")
-    from services.sqs_consumer import SQSConsumer  
-    logger.info("✅ SQSConsumer imported")
-    from services.call_summarizer import CallSummarizerService as CallSummarizer
-    logger.info("✅ CallSummarizer imported")
-    from services.crm_integration import CRMIntegration
-    logger.info("✅ CRMIntegration imported")
-    from services.email_service import EmailService
-    logger.info("✅ EmailService imported")
-    from services.agent_assignment import AgentAssignment
-    logger.info("✅ AgentAssignment imported")
-    services_available = True
-    logger.info("✅ All worker services imported successfully")
-except ImportError as e:
-    logger.error(f"❌ Service import failed: {e}")
-    logger.error(f"❌ Import error type: {type(e).__name__}")
-    logger.error(f"❌ Import error details: {str(e)}")
-    services_available = False
-except Exception as e:
-    logger.error(f"❌ Unexpected error during service import: {e}")
-    services_available = False
 
 
 try:
@@ -78,8 +54,26 @@ class WorkerService:
     
     async def _initialize_services(self):
         """Initialize services after database is ready"""
-        if services_available and not self.services_initialized:
+        global services_available
+        
+        if not self.services_initialized:
             try:
+                logger.info("🔍 Attempting to import worker services...")
+                from services.campaign_processor import CampaignProcessor
+                logger.info("✅ CampaignProcessor imported")
+                from services.sqs_consumer import SQSConsumer  
+                logger.info("✅ SQSConsumer imported")
+                from services.call_summarizer import CallSummarizerService as CallSummarizer
+                logger.info("✅ CallSummarizer imported")
+                from services.crm_integration import CRMIntegration
+                logger.info("✅ CRMIntegration imported")
+                from services.email_service import EmailService
+                logger.info("✅ EmailService imported")
+                from services.agent_assignment import AgentAssignment
+                logger.info("✅ AgentAssignment imported")
+                services_available = True
+                logger.info("✅ All worker services imported successfully")
+                
                 logger.info("🔍 Initializing worker services...")
                 self.campaign_processor = CampaignProcessor()
                 logger.info("✅ CampaignProcessor initialized")
