@@ -20,17 +20,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import services with fallbacks
+services_available = False
 try:
+    logger.info("🔍 Attempting to import worker services...")
     from services.campaign_processor import CampaignProcessor
+    logger.info("✅ CampaignProcessor imported")
     from services.sqs_consumer import SQSConsumer  
+    logger.info("✅ SQSConsumer imported")
     from services.call_summarizer import CallSummarizerService as CallSummarizer
+    logger.info("✅ CallSummarizer imported")
     from services.crm_integration import CRMIntegration
+    logger.info("✅ CRMIntegration imported")
     from services.email_service import EmailService
+    logger.info("✅ EmailService imported")
     from services.agent_assignment import AgentAssignment
+    logger.info("✅ AgentAssignment imported")
     services_available = True
     logger.info("✅ All worker services imported successfully")
 except ImportError as e:
-    logger.warning(f"⚠️ Service import failed: {e} - using basic mode")
+    logger.error(f"❌ Service import failed: {e}")
+    logger.error(f"❌ Import error type: {type(e).__name__}")
+    logger.error(f"❌ Import error details: {str(e)}")
+    services_available = False
+except Exception as e:
+    logger.error(f"❌ Unexpected error during service import: {e}")
     services_available = False
 
 
@@ -67,12 +80,19 @@ class WorkerService:
         """Initialize services after database is ready"""
         if services_available and not self.services_initialized:
             try:
+                logger.info("🔍 Initializing worker services...")
                 self.campaign_processor = CampaignProcessor()
+                logger.info("✅ CampaignProcessor initialized")
                 self.sqs_consumer = SQSConsumer()
+                logger.info("✅ SQSConsumer initialized")
                 self.call_summarizer = CallSummarizer()
+                logger.info("✅ CallSummarizer initialized")
                 self.email_service = EmailService()
+                logger.info("✅ EmailService initialized")
                 self.crm_integration = CRMIntegration()
+                logger.info("✅ CRMIntegration initialized")
                 self.agent_assignment = AgentAssignment()
+                logger.info("✅ AgentAssignment initialized")
                 self.services_initialized = True
                 logger.info("✅ All services initialized")
                 
@@ -81,6 +101,8 @@ class WorkerService:
                 
             except Exception as e:
                 logger.error(f"❌ Service initialization failed: {e}")
+                logger.error(f"❌ Error type: {type(e).__name__}")
+                logger.error(f"❌ Error details: {str(e)}")
                 self.services_initialized = False
         elif not services_available:
             logger.info("📝 Running in basic mode - services not available")
@@ -183,10 +205,29 @@ class WorkerService:
     async def _process_with_services(self):
         """Process with full service integration"""
         try:
-            # Check business hours using shared settings
+            # Check if services are properly initialized
             if not self.services_initialized:
-                logger.warning("⚠️ Services not yet initialized - skipping processing")
-                return
+                logger.warning("⚠️ Services not yet initialized - attempting to initialize...")
+                await self._initialize_services()
+                if not self.services_initialized:
+                    logger.error("❌ Failed to initialize services - skipping processing")
+                    return
+            
+            # Check if required service attributes exist
+            required_services = ['sqs_consumer', 'campaign_processor', 'email_service']
+            missing_services = []
+            for service_name in required_services:
+                if not hasattr(self, service_name):
+                    missing_services.append(service_name)
+            
+            if missing_services:
+                logger.error(f"❌ Missing service attributes: {missing_services}")
+                logger.error("❌ Re-initializing services...")
+                self.services_initialized = False
+                await self._initialize_services()
+                if not self.services_initialized:
+                    logger.error("❌ Failed to re-initialize services - skipping processing")
+                    return
             
             # Enhanced business hours check with testing mode priority
             is_business_hours = True  # Default to True for testing
@@ -216,28 +257,67 @@ class WorkerService:
                         logger.info("⏰ Outside business hours - worker in standby mode")
                 return
             
-            # 1. Process SQS queue messages
-            sqs_messages = await self.sqs_consumer.process_queue()
-            if sqs_messages:
-                logger.info(f"📥 Processed {len(sqs_messages)} SQS messages")
+            # Process services with error handling
+            try:
+                # 1. Process SQS queue messages
+                if hasattr(self, 'sqs_consumer'):
+                    sqs_messages = await self.sqs_consumer.process_queue()
+                    if sqs_messages:
+                        logger.info(f"📥 Processed {len(sqs_messages)} SQS messages")
+                else:
+                    logger.warning("⚠️ SQS consumer not available")
+            except Exception as e:
+                logger.error(f"❌ SQS processing error: {e}")
             
-            # 2. Process campaign batch (outbound calls)
-            campaign_result = await self.campaign_processor.process_campaign_batch()
-            if campaign_result.get("clients_processed", 0) > 0:
-                self.processed_count += campaign_result["clients_processed"]
-                logger.info(f"📞 Processed {campaign_result['clients_processed']} campaign calls")
+            try:
+                # 2. Process campaign batch (outbound calls)
+                if hasattr(self, 'campaign_processor'):
+                    campaign_result = await self.campaign_processor.process_campaign_batch()
+                    if campaign_result.get("clients_processed", 0) > 0:
+                        self.processed_count += campaign_result["clients_processed"]
+                        logger.info(f"📞 Processed {campaign_result['clients_processed']} campaign calls")
+                else:
+                    logger.warning("⚠️ Campaign processor not available")
+            except Exception as e:
+                logger.error(f"❌ Campaign processing error: {e}")
             
-            # 3. Process call summaries for completed calls
-            await self._process_call_summaries()
+            try:
+                # 3. Process call summaries for completed calls
+                if hasattr(self, 'call_summarizer'):
+                    await self._process_call_summaries()
+                else:
+                    logger.warning("⚠️ Call summarizer not available")
+            except Exception as e:
+                logger.error(f"❌ Call summary processing error: {e}")
             
-            # 4. Process CRM updates
-            await self._process_crm_updates()
+            try:
+                # 4. Process CRM updates
+                if hasattr(self, 'crm_integration'):
+                    await self._process_crm_updates()
+                else:
+                    logger.warning("⚠️ CRM integration not available")
+            except Exception as e:
+                logger.error(f"❌ CRM processing error: {e}")
             
-            # 5. Process agent assignments for interested clients
-            await self._process_agent_assignments()
+            try:
+                # 5. Process agent assignments for interested clients
+                if hasattr(self, 'agent_assignment'):
+                    await self._process_agent_assignments()
+                else:
+                    logger.warning("⚠️ Agent assignment not available")
+            except Exception as e:
+                logger.error(f"❌ Agent assignment processing error: {e}")
             
-            # 6. Send email notifications
-            await self._process_email_notifications()
+            try:
+                # 6. Send email notifications
+                if hasattr(self, 'email_service'):
+                    await self._process_email_notifications()
+                else:
+                    logger.warning("⚠️ Email service not available")
+            except Exception as e:
+                logger.error(f"❌ Email notification processing error: {e}")
+            
+
             
             # Log progress
             if self.processed_count % 10 == 0 and self.processed_count > 0:

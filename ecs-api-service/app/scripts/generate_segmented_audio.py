@@ -27,16 +27,23 @@ from services.elevenlabs_client import elevenlabs_client
 logger = logging.getLogger(__name__)
 
 # Directory setup - Generate in the app directory, not scripts directory
-OUTPUT_DIR = Path("../audio-generation")
+# Get the app directory (parent of scripts)
+SCRIPT_DIR = Path(__file__).parent
+APP_DIR = SCRIPT_DIR.parent
+OUTPUT_DIR = APP_DIR / "audio-generation"
 SEGMENTS_DIR = OUTPUT_DIR / "segments"
 CLIENT_NAMES_DIR = OUTPUT_DIR / "names" / "clients"
 AGENT_NAMES_DIR = OUTPUT_DIR / "names" / "agents"
 
 def ensure_directories_exist():
     """Create necessary directories"""
+    logger.info(f"🔧 Creating directories in: {OUTPUT_DIR}")
     SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
     CLIENT_NAMES_DIR.mkdir(parents=True, exist_ok=True)
     AGENT_NAMES_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ Created: {SEGMENTS_DIR}")
+    logger.info(f"✅ Created: {CLIENT_NAMES_DIR}")
+    logger.info(f"✅ Created: {AGENT_NAMES_DIR}")
 
 def convert_phone_to_natural_speech(phone: str) -> str:
     """Convert phone number to natural speech format"""
@@ -418,6 +425,10 @@ async def generate_all_audio():
 
 async def main():
     """Main function"""
+    
+    logger.info(f"🎯 Script running from: {Path(__file__).parent}")
+    logger.info(f"🎯 App directory: {APP_DIR}")
+    logger.info(f"🎯 Output directory: {OUTPUT_DIR}")
     
     # Ensure directories exist before generating
     ensure_directories_exist()
