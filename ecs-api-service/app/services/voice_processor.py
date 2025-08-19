@@ -102,7 +102,7 @@ class VoiceProcessor:
         
         logger.info(
             f"🗣️ Processing input: '{customer_input}' for session {session.session_id} "
-            f"in stage: {session.conversation_stage.value}"
+            f"in stage: {session.conversation_stage.value if hasattr(session.conversation_stage, 'value') else session.conversation_stage}"
         )
         
         try:
@@ -144,7 +144,7 @@ class VoiceProcessor:
             
             # If we're in GOODBYE or any unexpected stage, end the call
             else:
-                logger.info(f"✅ In final stage: {session.conversation_stage.value}")
+                logger.info(f"✅ In final stage: {session.conversation_stage.value if hasattr(session.conversation_stage, 'value') else session.conversation_stage}")
                 return await self._create_response(
                     response_text="Thank you for your time today. Have a wonderful day!",
                     response_category="goodbye",
@@ -357,7 +357,7 @@ class VoiceProcessor:
                 session_id=session.lyzr_session_id,
                 customer_message=customer_input,
                 context={
-                    "conversation_stage": session.conversation_stage.value,
+                    "conversation_stage": session.conversation_stage.value if hasattr(session.conversation_stage, 'value') else session.conversation_stage,
                     "client_name": session.client_data.get("first_name", ""),
                     "is_first_interaction": len(session.conversation_turns) == 0
                 }
@@ -652,7 +652,7 @@ class VoiceProcessor:
         """Create standardized response"""
         
         if hasattr(conversation_stage, 'value'):
-            stage_value = conversation_stage.value
+            stage_value = conversation_stage.value if hasattr(conversation_stage, 'value') else conversation_stage
         else:
             stage_value = conversation_stage
         

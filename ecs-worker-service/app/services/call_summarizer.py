@@ -116,7 +116,7 @@ class CallSummarizerService:
             "call_duration": call_session.session_metrics.total_call_duration_seconds,
             "total_turns": len(call_session.conversation_turns),
             "call_outcome": call_outcome,
-            "conversation_stage_reached": call_session.conversation_stage.value
+            "conversation_stage_reached": call_session.conversation_stage.value if hasattr(call_session.conversation_stage, 'value') else call_session.conversation_stage
         }
         
         # Build comprehensive prompt for LYZR Summary Agent

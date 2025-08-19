@@ -55,6 +55,10 @@ class SegmentedAudioService:
                 "segments": ["greeting_start", "[CLIENT_NAME]", "greeting_middle"],
                 "description": "Personalized greeting with client name"
             },
+            "non_medicare_greeting": {
+                "segments": ["non_medicare_greeting_start", "[CLIENT_NAME]", "non_medicare_greeting_middle"],
+                "description": "Non-Medicare client greeting with client name"
+            },
             "agent_intro": {
                 "segments": ["agent_intro_start", "[AGENT_NAME]", "agent_intro_middle"],
                 "description": "Agent introduction with agent name"

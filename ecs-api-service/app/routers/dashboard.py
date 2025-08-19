@@ -302,7 +302,7 @@ async def get_call_logs(
                 "started_at": session.started_at.isoformat() if session.started_at else None,
                 "completed_at": session.completed_at.isoformat() if session.completed_at else None,
                 "conversation_turns": len(session.conversation_turns) if session.conversation_turns else 0,
-                "conversation_stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+                "conversation_stage": session.conversation_stage.value if session.conversation_stage and hasattr(session.conversation_stage, 'value') else (session.conversation_stage if session.conversation_stage else "unknown"),
                 "is_test_call": getattr(session, 'is_test_call', False),
                 "total_attempts": total_attempts,
                 "attempts_left": attempts_left,
@@ -396,7 +396,7 @@ async def get_call_details(call_id: str):
             "started_at": session.started_at.isoformat() if session.started_at else None,
             "completed_at": session.completed_at.isoformat() if session.completed_at else None,
             "conversation_turns": len(session.conversation_turns) if session.conversation_turns else 0,
-            "conversation_stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+            "conversation_stage": session.conversation_stage.value if session.conversation_stage and hasattr(session.conversation_stage, 'value') else (session.conversation_stage if session.conversation_stage else "unknown"),
             "transcript": transcript,
             "summary": summary,
             "metrics": {
@@ -787,7 +787,7 @@ async def get_active_calls():
                         "client_phone": session.phone_number,
                         "client_name": session.client_data.get("client_name", "Unknown") if session.client_data else "Unknown",
                         "status": session.call_status.value if session.call_status else "in_progress",
-                        "stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+                        "stage": session.conversation_stage.value if session.conversation_stage and hasattr(session.conversation_stage, 'value') else (session.conversation_stage if session.conversation_stage else "unknown"),
                         "turns": len(session.conversation_turns) if session.conversation_turns else 0,
                         "started_at": session.started_at.isoformat() if session.started_at else None,
                         "duration": int((datetime.utcnow() - session.started_at).total_seconds()) if session.started_at else 0
@@ -850,7 +850,7 @@ async def get_call_status(call_sid: str):
                 "call_status": session.call_status.value if session.call_status else "in_progress",
                 "client_phone": session.phone_number,
                 "client_name": session.client_data.get("client_name", "Unknown") if session.client_data else "Unknown",
-                "conversation_stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+                "conversation_stage": session.conversation_stage.value if session.conversation_stage and hasattr(session.conversation_stage, 'value') else (session.conversation_stage if session.conversation_stage else "unknown"),
                 "turns": len(session.conversation_turns) if session.conversation_turns else 0,
                 "current_turn": session.current_turn_number if hasattr(session, 'current_turn_number') else 0,
                 "started_at": session.started_at.isoformat() if session.started_at else None,
@@ -871,7 +871,7 @@ async def get_call_status(call_sid: str):
                         "call_status": cached_session.call_status.value if cached_session.call_status else "unknown",
                         "client_phone": cached_session.phone_number,
                         "client_name": cached_session.client_data.get("client_name", "Unknown") if cached_session.client_data else "Unknown",
-                        "conversation_stage": cached_session.conversation_stage.value if cached_session.conversation_stage else "unknown",
+                        "conversation_stage": cached_session.conversation_stage.value if cached_session.conversation_stage and hasattr(cached_session.conversation_stage, 'value') else (cached_session.conversation_stage if cached_session.conversation_stage else "unknown"),
                         "turns": len(cached_session.conversation_turns) if cached_session.conversation_turns else 0,
                         "found_in": "redis_cache"
                     }
@@ -893,7 +893,7 @@ async def get_call_status(call_sid: str):
                             "call_status": db_session.call_status.value if db_session.call_status else "completed",
                             "client_phone": db_session.phone_number,
                             "client_name": db_session.client_data.get("client_name", "Unknown") if db_session.client_data else "Unknown",
-                            "conversation_stage": db_session.conversation_stage.value if db_session.conversation_stage else "completed",
+                            "conversation_stage": db_session.conversation_stage.value if db_session.conversation_stage and hasattr(db_session.conversation_stage, 'value') else (db_session.conversation_stage if db_session.conversation_stage else "completed"),
                             "turns": len(db_session.conversation_turns) if db_session.conversation_turns else 0,
                             "final_outcome": db_session.final_outcome,
                             "duration": db_session.session_metrics.total_call_duration_seconds if db_session.session_metrics else 0,

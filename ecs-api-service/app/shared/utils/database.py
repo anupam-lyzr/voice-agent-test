@@ -105,6 +105,12 @@ class DatabaseClient:
         """Check if database is connected"""
         return self._connected
     
+    async def admin(self):
+        """Get admin database for health checks"""
+        if not self._connected or not self.client:
+            return None
+        return self.client.admin
+    
     @property
     def clients(self) -> AsyncIOMotorCollection:
         """Get clients collection"""

@@ -285,7 +285,7 @@ class CallSession(BaseModel):
             "total_turns": self.session_metrics.total_turns,
             "final_outcome": self.final_outcome,
             "customer_interested": self.customer_interested,
-            "conversation_stage": self.conversation_stage.value,
+            "conversation_stage": self.conversation_stage.value if hasattr(self.conversation_stage, 'value') else self.conversation_stage,
             "avg_response_time_ms": self.session_metrics.avg_response_time_ms,
             "static_responses": self.session_metrics.static_responses_used,
             "dynamic_responses": self.session_metrics.dynamic_responses_used,

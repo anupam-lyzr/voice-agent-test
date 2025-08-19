@@ -435,9 +435,12 @@ async def health_check():
     # Check database (non-blocking)
     try:
         if db_client is not None:
-            # Simple ping test with timeout
-            await asyncio.wait_for(db_client.admin.command('ping'), timeout=5.0)
-            health_status["services"]["database"] = "healthy"
+            admin_db = await db_client.admin()
+            if admin_db:
+                await asyncio.wait_for(admin_db.command('ping'), timeout=5.0)
+                health_status["services"]["database"] = "healthy"
+            else:
+                health_status["services"]["database"] = "error"
         else:
             health_status["services"]["database"] = "not_configured"
     except Exception as e:

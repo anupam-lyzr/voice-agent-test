@@ -665,7 +665,8 @@ async def enhanced_cache_session(session: CallSession):
         try:
             from shared.utils.database import db_client
             if db_client is not None and db_client.database is not None:
-                session_dict = session.dict()
+                # Use model_dump with by_alias=True to handle field aliases properly
+                session_dict = session.model_dump(by_alias=True)
                 session_dict["_id"] = session.session_id
                 await db_client.database.call_sessions.replace_one(
                     {"twilioCallSid": session.twilio_call_sid},
@@ -1063,11 +1064,11 @@ async def status_webhook(
                 except ValueError:
                     session.call_status = CallStatusEnum.COMPLETED
                 
-                session.ended_at = datetime.utcnow()
+                session.completed_at = datetime.utcnow()
                 
                 # Calculate duration
-                if session.started_at and session.ended_at:
-                    duration = (session.ended_at - session.started_at).total_seconds()
+                if session.started_at and session.completed_at:
+                    duration = (session.completed_at - session.started_at).total_seconds()
                     if not hasattr(session, 'session_metrics'):
                         session.session_metrics = {}
                     session.session_metrics['total_call_duration_seconds'] = duration
@@ -1142,7 +1143,7 @@ async def get_active_sessions():
                 "session_id": session.session_id,
                 "phone_number": session.phone_number,
                 "call_status": session.call_status.value if session.call_status else "unknown",
-                "conversation_stage": session.conversation_stage.value if session.conversation_stage else "unknown",
+                "conversation_stage": session.conversation_stage.value if session.conversation_stage and hasattr(session.conversation_stage, 'value') else (session.conversation_stage if session.conversation_stage else "unknown"),
                 "turns": len(session.conversation_turns) if session.conversation_turns else 0,
                 "started_at": session.started_at.isoformat() if session.started_at else None,
                 "client_name": f"{session.client_data.get('first_name', '')} {session.client_data.get('last_name', '')}".strip() if session.client_data else "Unknown"
@@ -1223,7 +1224,7 @@ async def debug_session(call_sid: str):
                 "session_id": session.session_id,
                 "phone_number": session.phone_number,
                 "call_status": session.call_status.value if session.call_status else None,
-                "conversation_stage": session.conversation_stage.value if session.conversation_stage else None,
+                "conversation_stage": session.conversation_stage.value if session.conversation_stage and hasattr(session.conversation_stage, 'value') else (session.conversation_stage if session.conversation_stage else None),
                 "turns": len(session.conversation_turns) if session.conversation_turns else 0,
                 "started_at": session.started_at.isoformat() if session.started_at else None,
                 "client_data": session.client_data,
@@ -1243,7 +1244,7 @@ async def debug_session(call_sid: str):
                         "final_outcome": doc.get("final_outcome"),
                         "turns": len(doc.get("conversation_turns", [])),
                         "started_at": doc.get("started_at").isoformat() if doc.get("started_at") else None,
-                        "ended_at": doc.get("ended_at").isoformat() if doc.get("ended_at") else None
+                        "completed_at": doc.get("completed_at").isoformat() if doc.get("completed_at") else None
                     }
                     debug_info["found_in"].append("database")
         except Exception as db_error:

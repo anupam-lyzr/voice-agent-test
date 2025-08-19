@@ -61,6 +61,17 @@ class RedisClient:
         """Check if Redis is connected"""
         return self._connected
     
+    async def ping(self) -> bool:
+        """Ping Redis to check connection"""
+        if not self._connected or not self.client:
+            return False
+        try:
+            await self.client.ping()
+            return True
+        except Exception as e:
+            logger.error(f"Redis ping failed: {e}")
+            return False
+    
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Set a value in Redis with optional TTL"""
         if not self._connected:
