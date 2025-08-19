@@ -1,6 +1,6 @@
 """
 Segmented Audio Service - Production Ready
-Handles real-time audio concatenation for personalized responses
+Handles real-time audio concatenation for personalized responses with S3 support
 """
 
 import asyncio
@@ -23,6 +23,14 @@ class SegmentedAudioService:
     """Service for concatenating audio segments with real names"""
 
     def __init__(self):
+        # Import S3 audio service
+        try:
+            from services.s3_audio_service import s3_audio_service
+            self.s3_audio_service = s3_audio_service
+        except ImportError:
+            self.s3_audio_service = None
+            logger.warning("⚠️ S3 Audio Service not available, using local files only")
+        
         # Use the correct path based on your structure
         self.base_dir = Path("audio-generation")
         if not self.base_dir.exists():
@@ -292,7 +300,17 @@ class SegmentedAudioService:
                 
                 else:
                     # Get segment audio
-                    segment_file = self.segments_dir / f"{segment}.mp3"
+                    filename = f"{segment}.mp3"
+                    
+                    # Use S3 service if available
+                    if self.s3_audio_service:
+                        audio_path = await self.s3_audio_service.get_audio_file_path("segments", filename)
+                        if audio_path:
+                            audio_files.append(str(audio_path))
+                            continue
+                    
+                    # Fallback to local files
+                    segment_file = self.segments_dir / filename
                     if segment_file.exists():
                         audio_files.append(str(segment_file))
                     else:
@@ -329,14 +347,30 @@ class SegmentedAudioService:
         
         try:
             if name_type == "client":
-                # Look for client name audio - try exact match first
-                name_file = self.client_names_dir / f"{name.lower()}.mp3"
+                # Try exact match first
+                filename = f"{name.lower()}.mp3"
                 
-                if not name_file.exists():
-                    # Try first name only
-                    first_name = name.split()[0].lower()
-                    name_file = self.client_names_dir / f"{first_name}.mp3"
+                # Use S3 service if available
+                if self.s3_audio_service:
+                    audio_path = await self.s3_audio_service.get_audio_file_path("names/clients", filename)
+                    if audio_path:
+                        return str(audio_path)
                 
+                # Fallback to local files
+                name_file = self.client_names_dir / filename
+                if name_file.exists():
+                    return str(name_file)
+                
+                # Try first name only
+                first_name = name.split()[0].lower()
+                filename = f"{first_name}.mp3"
+                
+                if self.s3_audio_service:
+                    audio_path = await self.s3_audio_service.get_audio_file_path("names/clients", filename)
+                    if audio_path:
+                        return str(audio_path)
+                
+                name_file = self.client_names_dir / filename
                 if name_file.exists():
                     return str(name_file)
                 else:
@@ -345,10 +379,18 @@ class SegmentedAudioService:
                     return await self._generate_name_audio(name, "client")
             
             elif name_type == "agent":
-                # Look for agent name audio - handle your specific agent names
+                # Handle agent name audio
                 agent_filename = name.lower().replace(' ', '_').replace('.', '')
-                name_file = self.agent_names_dir / f"{agent_filename}.mp3"
+                filename = f"{agent_filename}.mp3"
                 
+                # Use S3 service if available
+                if self.s3_audio_service:
+                    audio_path = await self.s3_audio_service.get_audio_file_path("names/agents", filename)
+                    if audio_path:
+                        return str(audio_path)
+                
+                # Fallback to local files
+                name_file = self.agent_names_dir / filename
                 if name_file.exists():
                     return str(name_file)
                 else:

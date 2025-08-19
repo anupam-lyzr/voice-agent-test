@@ -1,25 +1,26 @@
-# In your API service Dockerfile
-FROM python:3.11-slim
+# Use Alpine base image to save disk space
+FROM python:3.11-alpine
 
 WORKDIR /app
 
 # Install dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ffmpeg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk update && \
+    apk add --no-cache \
+        curl \
+        ffmpeg \
+        gcc \
+        musl-dev \
+        python3-dev \
+        libffi-dev \
+        openssl-dev
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code (excluding audio-generation via .dockerignore)
 COPY app/ .
 
-# Copy your audio-generation directory with all audio files
-# COPY app/audio-generation /app/audio-generation
-
-# Ensure directories exist
+# Create necessary directories for runtime
 RUN mkdir -p static/audio/temp \
     audio-generation/segments \
     audio-generation/names/clients \

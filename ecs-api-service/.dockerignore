@@ -1,0 +1,43 @@
+# Exclude audio-generation folder (will be loaded from S3 in production)
+app/audio-generation/
+app/audio-generation/segments/
+app/audio-generation/names/
+app/audio-generation/concatenated_cache/
+
+# Exclude large audio files
+*.wav
+*.mp3
+*.m4a
+*.flac
+
+# Exclude cache and temp files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+*.log
+
+# Exclude development files
+.git/
+.gitignore
+README.md
+*.md
+
+# Exclude test files
+tests/
+test_*.py
+*_test.py
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Exclude OS files
+.DS_Store
+Thumbs.db

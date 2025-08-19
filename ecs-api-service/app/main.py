@@ -48,6 +48,18 @@ try:
         async def get_available_slots():
             return {"message": "Slot selection service not implemented yet"}
     
+    # Try to import audio management router if it exists
+    try:
+        from routers.audio_management import router as audio_management_router
+    except ImportError:
+        # Create minimal audio management router if missing
+        from fastapi import APIRouter
+        audio_management_router = APIRouter(prefix="/audio", tags=["Audio Management"])
+        
+        @audio_management_router.get("/status")
+        async def get_audio_status():
+            return {"message": "Audio management service not implemented yet"}
+    
     logger.info("✅ Enhanced routers imported successfully")
     
 except ImportError as import_error:
@@ -330,6 +342,7 @@ try:
     app.include_router(twilio_router)
     app.include_router(dashboard_router) 
     app.include_router(slot_selection_router)
+    app.include_router(audio_management_router)
     logger.info("🔗 Enhanced routers included successfully")
 except Exception as e:
     logger.error(f"❌ Router inclusion failed: {e}")
