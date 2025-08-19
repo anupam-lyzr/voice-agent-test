@@ -75,12 +75,45 @@ class WorkerService:
                 self.agent_assignment = AgentAssignment()
                 self.services_initialized = True
                 logger.info("✅ All services initialized")
+                
+                # Perform health checks
+                await self._check_service_health()
+                
             except Exception as e:
                 logger.error(f"❌ Service initialization failed: {e}")
                 self.services_initialized = False
         elif not services_available:
             logger.info("📝 Running in basic mode - services not available")
             self.services_initialized = True
+
+    async def _check_service_health(self):
+        """Check health of initialized services"""
+        try:
+            health_checks = []
+            
+            # Check email service
+            if hasattr(self, 'email_service'):
+                email_configured = self.email_service.is_configured()
+                health_checks.append(f"Email Service: {'✅' if email_configured else '❌'}")
+            
+            # Check database connection
+            if shared_available and hasattr(db_client, 'is_connected'):
+                db_connected = db_client.is_connected()
+                health_checks.append(f"Database: {'✅' if db_connected else '❌'}")
+            
+            # Check Redis connection
+            if shared_available:
+                try:
+                    from shared.utils.redis_client import redis_client
+                    redis_connected = redis_client.is_connected()
+                    health_checks.append(f"Redis: {'✅' if redis_connected else '❌'}")
+                except:
+                    health_checks.append("Redis: ❌")
+            
+            logger.info(f"🔍 Service Health Check: {' | '.join(health_checks)}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Health check failed: {e}")
             
 
     
@@ -88,7 +121,15 @@ class WorkerService:
         """Start the worker service"""
         
         logger.info("🚀 Starting Voice Agent Worker Service")
-        logger.info(f"🎯 Environment: {getattr(settings, 'environment', 'development') if shared_available else 'development'}")
+        if shared_available:
+            environment = getattr(settings, 'environment', 'development')
+            testing_mode = getattr(settings, 'testing_mode', False)
+            logger.info(f"🎯 Environment: {environment}")
+            logger.info(f"🧪 Testing Mode: {'✅ ENABLED' if testing_mode else '❌ DISABLED'}")
+            if testing_mode:
+                logger.info("🔧 TESTING MODE: Business hours bypassed - worker will process 24/7")
+        else:
+            logger.info(f"🎯 Environment: development (shared not available)")
         logger.info(f"🔧 Services Available: {services_available}")
         
         self.running = True
@@ -106,10 +147,12 @@ class WorkerService:
                     logger.info("✅ Database connection verified")
                 else:
                     logger.error("❌ Database connection failed")
+                    logger.warning("⚠️ Worker will run in basic mode without database access")
                     
             except Exception as e:
                 logger.error(f"❌ Database initialization failed: {e}")
-                logger.error("This will prevent the worker from processing data")
+                logger.warning("⚠️ Worker will run in basic mode without database access")
+                # Continue running in basic mode rather than failing completely
             
             try:
                 await init_redis()
@@ -145,16 +188,32 @@ class WorkerService:
                 logger.warning("⚠️ Services not yet initialized - skipping processing")
                 return
             
+            # Enhanced business hours check with testing mode priority
+            is_business_hours = True  # Default to True for testing
             if shared_available and hasattr(settings, 'is_business_hours'):
                 is_business_hours = settings.is_business_hours()
+                testing_mode = getattr(settings, 'testing_mode', False)
+                environment = getattr(settings, 'environment', 'unknown')
+                logger.debug(f"🔍 Business hours check: {is_business_hours} (environment: {environment}, testing_mode: {testing_mode})")
             else:
-                # Fallback business hours check
-                current_hour = datetime.now().hour
-                is_business_hours = 9 <= current_hour < 17  # 9 AM to 5 PM
+                # Fallback business hours check - only for production without testing mode
+                testing_mode = getattr(settings, 'testing_mode', False)
+                if testing_mode:
+                    logger.debug("🔍 Testing mode enabled - allowing processing outside business hours")
+                elif getattr(settings, 'environment', 'development').lower() == 'production':
+                    current_hour = datetime.now().hour
+                    is_business_hours = 9 <= current_hour < 17  # 9 AM to 5 PM
+                    logger.debug(f"🔍 Fallback business hours check: {is_business_hours} (hour: {current_hour})")
+                else:
+                    logger.debug("🔍 Development mode - allowing processing outside business hours")
             
             if not is_business_hours:
                 if self.processed_count % 20 == 0:  # Log every 20 cycles
-                    logger.info("⏰ Outside business hours - worker in standby mode")
+                    testing_mode = getattr(settings, 'testing_mode', False) if shared_available else False
+                    if testing_mode:
+                        logger.info("🧪 TESTING MODE: Business hours bypassed - continuing processing")
+                    else:
+                        logger.info("⏰ Outside business hours - worker in standby mode")
                 return
             
             # 1. Process SQS queue messages
@@ -190,12 +249,25 @@ class WorkerService:
     async def _process_basic_mode(self):
         """Basic processing without full services"""
         try:
-            current_hour = datetime.now().hour
-            is_business_hours = 9 <= current_hour < 17
+            # Enhanced business hours check for basic mode with testing mode priority
+            is_business_hours = True  # Default to True for testing
+            testing_mode = getattr(settings, 'testing_mode', False)
+            if testing_mode:
+                logger.debug("🔍 Basic mode - testing mode enabled, allowing processing")
+            elif getattr(settings, 'environment', 'development').lower() == 'production':
+                current_hour = datetime.now().hour
+                is_business_hours = 9 <= current_hour < 17
+                logger.debug(f"🔍 Basic mode business hours check: {is_business_hours} (hour: {current_hour})")
+            else:
+                logger.debug("🔍 Basic mode - development environment, allowing processing")
             
             if not is_business_hours:
                 if self.processed_count % 20 == 0:
-                    logger.info("⏰ Outside business hours - basic worker standby")
+                    testing_mode = getattr(settings, 'testing_mode', False) if shared_available else False
+                    if testing_mode:
+                        logger.info("🧪 TESTING MODE: Business hours bypassed - basic worker continuing")
+                    else:
+                        logger.info("⏰ Outside business hours - basic worker standby")
                 return
             
             # Basic processing

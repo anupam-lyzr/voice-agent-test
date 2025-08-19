@@ -21,7 +21,7 @@ except ImportError:
 
 from shared.config.settings import settings
 from shared.models.client import Client
-from shared.utils.database import client_repo
+from shared.utils.client_repository import client_repo
 
 logger = logging.getLogger(__name__)
 

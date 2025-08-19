@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
+from .custom_types import PyObjectId
 
 class CallStatus(str, Enum):
     """Current status of a call session"""
@@ -17,23 +18,33 @@ class CallStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     BUSY = "busy"
-    NO_ANSWER = "no_answer"
+    PENDING = "pending"
+    NO_ANSWER = "no-answer"
+    CANCELED = "canceled"
 
 class ConversationStage(str, Enum):
     """Current stage of the conversation"""
     GREETING = "greeting"
     INTEREST_CHECK = "interest_check"
     SCHEDULING = "scheduling"
+    DNC_CHECK = "dnc_check"
     DNC_QUESTION = "dnc_question"
     CLOSING = "closing"
     COMPLETED = "completed"
+    QUALIFICATION = "qualification"
+    CONFIRMATION = "confirmation"
+    OBJECTION_HANDLING = "objection_handling"
+    GOODBYE = "goodbye"
     VOICEMAIL = "voicemail"
+    ERROR = "error"
 
 class ResponseType(str, Enum):
     """Type of response being used"""
     STATIC_AUDIO = "static_audio"
     DYNAMIC_TTS = "dynamic_tts"
     HYBRID = "hybrid"
+    STATIC = "static"
+    DYNAMIC = "dynamic"
 
 class ConversationTurn(BaseModel):
     """Individual turn in the conversation"""

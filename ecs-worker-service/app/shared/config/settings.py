@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     app_name: str = "Voice Agent Production"
     debug: bool = Field(default=False, env="DEBUG")
     environment: str = Field(default="development", env="ENVIRONMENT")
+    testing_mode: bool = Field(default=False, env="TESTING_MODE")
     
     # AWS Configuration
     aws_region: str = Field(default="us-east-1", env="AWS_REGION")
@@ -128,19 +129,20 @@ class Settings(BaseSettings):
     
     @property
     def mongodb_uri(self) -> str:
-        """Get MongoDB connection URI"""
+        """Get MongoDB connection URI based on the environment."""
         if self.documentdb_username and self.documentdb_password:
             auth = f"{self.documentdb_username}:{self.documentdb_password}@"
         else:
             auth = ""
-        
-        if self.documentdb_ssl:
-            ssl_params = "?ssl=true&ssl_ca_certs=rds-combined-ca-bundle.pem&retryWrites=false"
+
+        if self.is_production():
+            # Use AWS DocumentDB style URI
+            # NOTE: Do NOT include `authSource=admin` for AWS DocumentDB unless required (not needed here)
+            ssl_params = "?ssl=true&retryWrites=false&tlsAllowInvalidCertificates=true"
+            return f"mongodb://{auth}{self.documentdb_host}:{self.documentdb_port}/{ssl_params}"
         else:
-            # For local development with Docker MongoDB, add authSource=admin
-            ssl_params = "?authSource=admin" if auth else ""
-        
-        return f"mongodb://{auth}{self.documentdb_host}:{self.documentdb_port}/{self.documentdb_database}{ssl_params}"
+            # Local dev needs authSource=admin because the root user is created in the admin DB
+            return f"mongodb://{auth}{self.documentdb_host}:{self.documentdb_port}/{self.documentdb_database}?authSource=admin"
     
     @property
     def elevenlabs_voice_settings(self) -> dict:
@@ -168,6 +170,14 @@ class Settings(BaseSettings):
     
     def is_business_hours(self) -> bool:
         """Check if current time is within business hours"""
+        # For testing mode, always return True to allow testing outside business hours
+        if self.testing_mode:
+            return True
+            
+        # For development environment, also allow testing outside business hours
+        if self.environment.lower() == "development":
+            return True
+            
         try:
             tz = pytz.timezone(self.business_timezone)
             now = datetime.now(tz)
