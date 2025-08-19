@@ -1,14 +1,4 @@
-# Exclude audio-generation folder (will be loaded from S3 in production)
-app/audio-generation/
-app/audio-generation/segments/
-app/audio-generation/names/
-app/audio-generation/concatenated_cache/
 
-# Exclude large audio files
-*.wav
-*.mp3
-*.m4a
-*.flac
 
 # Exclude cache and temp files
 __pycache__/
@@ -16,9 +6,8 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-env/
+
 venv/
-.env
 *.log
 
 # Exclude development files
