@@ -1,15 +1,18 @@
-# Use a larger base image to avoid disk space issues
-FROM python:3.11
+# Use Alpine base image to save disk space
+FROM python:3.11-alpine
 
 WORKDIR /app
 
 # Install dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apk update && \
+    apk add --no-cache \
         curl \
         ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+        gcc \
+        musl-dev \
+        python3-dev \
+        libffi-dev \
+        openssl-dev
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
