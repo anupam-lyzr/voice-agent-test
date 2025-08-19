@@ -254,6 +254,9 @@ async def get_call_logs(
         
         call_logs = []
         async for doc in cursor:
+            # Remove _id field to avoid validation errors
+            if "_id" in doc:
+                del doc["_id"]
             session = CallSession(**doc)
             
             # Get client information
@@ -347,6 +350,9 @@ async def get_call_details(call_id: str):
         if not doc:
             raise HTTPException(404, "Call not found")
         
+        # Remove _id field to avoid validation errors
+        if "_id" in doc:
+            del doc["_id"]
         session = CallSession(**doc)
         
         # Get client information
@@ -885,6 +891,9 @@ async def get_call_status(call_sid: str):
                 if db_client is not None and db_client.database is not None:
                     doc = await db_client.database.call_sessions.find_one({"twilio_call_sid": call_sid})
                     if doc:
+                        # Remove _id field to avoid validation errors
+                        if "_id" in doc:
+                            del doc["_id"]
                         db_session = CallSession(**doc)
                         return {
                             "call_sid": call_sid,

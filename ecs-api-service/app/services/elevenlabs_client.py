@@ -150,6 +150,11 @@ class ElevenLabsTTSClient:
                     error_msg += " (Rate limit exceeded)"
                 elif response.status_code == 401:
                     error_msg += " (Invalid API key)"
+                    # Add configuration debugging info
+                    api_key_length = len(self.api_key) if self.api_key else 0
+                    api_key_preview = self.api_key[:8] + "..." if self.api_key and len(self.api_key) > 8 else "None"
+                    logger.error(f"❌ ElevenLabs API Key: {api_key_preview} (length: {api_key_length})")
+                    logger.error(f"❌ ElevenLabs Base URL: {self.base_url}")
                 
                 logger.error(f"❌ {error_msg}")
                 self.errors_count += 1

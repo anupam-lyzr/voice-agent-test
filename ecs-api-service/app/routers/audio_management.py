@@ -167,37 +167,52 @@ async def sync_audio_from_s3_background():
         logger.info(f"📥 Syncing audio files to: {audio_dir}")
         
         # List objects in S3 bucket
-        paginator = s3_client.get_paginator('list_objects_v2')
-        pages = paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix='audio-files/')
-        
-        for page in pages:
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    s3_key = obj['Key']
-                    
-                    # Skip if it's a directory
-                    if s3_key.endswith('/'):
-                        continue
-                    
-                    # Calculate local file path
-                    relative_path = s3_key.replace('audio-files/', '')
-                    local_path = audio_dir / relative_path
-                    
-                    # Create directory if needed
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    try:
-                        # Download file from S3
-                        s3_client.download_file(
-                            S3_BUCKET_NAME,
-                            s3_key,
-                            str(local_path)
-                        )
-                        logger.info(f"✅ Downloaded: {relative_path}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to download {s3_key}: {e}")
-        
-        logger.info("✅ S3 sync completed")
+        try:
+            paginator = s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix='audio-files/')
+            
+            for page in pages:
+                if 'Contents' in page:
+                    for obj in page['Contents']:
+                        s3_key = obj['Key']
+                        
+                        # Skip if it's a directory
+                        if s3_key.endswith('/'):
+                            continue
+                        
+                        # Calculate local file path
+                        relative_path = s3_key.replace('audio-files/', '')
+                        local_path = audio_dir / relative_path
+                        
+                        # Create directory if needed
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        try:
+                            # Download file from S3
+                            s3_client.download_file(
+                                S3_BUCKET_NAME,
+                                s3_key,
+                                str(local_path)
+                            )
+                            logger.info(f"✅ Downloaded: {relative_path}")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to download {s3_key}: {e}")
+            
+            logger.info("✅ S3 sync completed")
+            
+        except Exception as e:
+            logger.error(f"❌ S3 sync failed: {e}")
+            
+            # Provide helpful error information for common S3 permission issues
+            if "AccessDenied" in str(e) or "not authorized" in str(e).lower():
+                logger.error(f"❌ S3 Permission Error: The ECS task role needs the following IAM permissions:")
+                logger.error(f"❌ - s3:ListBucket on resource: arn:aws:s3:::{S3_BUCKET_NAME}")
+                logger.error(f"❌ - s3:GetObject on resource: arn:aws:s3:::{S3_BUCKET_NAME}/*")
+                logger.error(f"❌ Current bucket: {S3_BUCKET_NAME}, Region: {S3_REGION}")
+            elif "NoSuchBucket" in str(e):
+                logger.error(f"❌ S3 Bucket Error: Bucket '{S3_BUCKET_NAME}' does not exist")
+            elif "InvalidAccessKeyId" in str(e):
+                logger.error(f"❌ AWS Credentials Error: Invalid or missing AWS credentials")
         
     except Exception as e:
         logger.error(f"❌ Error in background S3 sync: {e}")
@@ -219,6 +234,7 @@ async def get_audio_status():
         
         # Count S3 files
         s3_files = []
+        s3_error = None
         try:
             paginator = s3_client.get_paginator('list_objects_v2')
             pages = paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix='audio-files/')
@@ -229,7 +245,20 @@ async def get_audio_status():
                         if not obj['Key'].endswith('/'):
                             s3_files.append(obj['Key'].replace('audio-files/', ''))
         except Exception as e:
+            s3_error = str(e)
             logger.warning(f"⚠️ Could not list S3 files: {e}")
+            
+            # Provide helpful error information for common S3 permission issues
+            if "AccessDenied" in str(e) or "not authorized" in str(e).lower():
+                logger.error(f"❌ S3 Permission Error: The ECS task role needs the following IAM permissions:")
+                logger.error(f"❌ - s3:ListBucket on resource: arn:aws:s3:::{S3_BUCKET_NAME}")
+                logger.error(f"❌ - s3:GetObject on resource: arn:aws:s3:::{S3_BUCKET_NAME}/*")
+                logger.error(f"❌ - s3:PutObject on resource: arn:aws:s3:::{S3_BUCKET_NAME}/*")
+                logger.error(f"❌ Current bucket: {S3_BUCKET_NAME}, Region: {S3_REGION}")
+            elif "NoSuchBucket" in str(e):
+                logger.error(f"❌ S3 Bucket Error: Bucket '{S3_BUCKET_NAME}' does not exist")
+            elif "InvalidAccessKeyId" in str(e):
+                logger.error(f"❌ AWS Credentials Error: Invalid or missing AWS credentials")
         
         # Get S3 audio service cache stats
         cache_stats = {}
@@ -245,6 +274,7 @@ async def get_audio_status():
             "local_files": local_files[:10],  # Show first 10
             "s3_files": s3_files[:10],  # Show first 10
             "s3_bucket": S3_BUCKET_NAME,
+            "s3_error": s3_error,  # Include S3 error if any
             "cache_stats": cache_stats
         }
         

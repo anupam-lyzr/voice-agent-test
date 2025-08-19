@@ -59,34 +59,98 @@ class WorkerService:
         if not self.services_initialized:
             try:
                 logger.info("🔍 Attempting to import worker services...")
-                from services.campaign_processor import CampaignProcessor
-                logger.info("✅ CampaignProcessor imported")
-                from services.sqs_consumer import SQSConsumer  
-                logger.info("✅ SQSConsumer imported")
-                from services.call_summarizer import CallSummarizerService as CallSummarizer
-                logger.info("✅ CallSummarizer imported")
-                from services.crm_integration import CRMIntegration
-                logger.info("✅ CRMIntegration imported")
-                from services.email_service import EmailService
-                logger.info("✅ EmailService imported")
-                from services.agent_assignment import AgentAssignment
-                logger.info("✅ AgentAssignment imported")
+                
+                # Import services one by one with detailed error handling
+                try:
+                    from services.campaign_processor import CampaignProcessor
+                    logger.info("✅ CampaignProcessor imported")
+                except Exception as e:
+                    logger.error(f"❌ Failed to import CampaignProcessor: {e}")
+                    raise
+                
+                try:
+                    from services.sqs_consumer import SQSConsumer  
+                    logger.info("✅ SQSConsumer imported")
+                except Exception as e:
+                    logger.error(f"❌ Failed to import SQSConsumer: {e}")
+                    raise
+                
+                try:
+                    from services.call_summarizer import CallSummarizerService as CallSummarizer
+                    logger.info("✅ CallSummarizer imported")
+                except Exception as e:
+                    logger.error(f"❌ Failed to import CallSummarizer: {e}")
+                    raise
+                
+                try:
+                    from services.crm_integration import CRMIntegration
+                    logger.info("✅ CRMIntegration imported")
+                except Exception as e:
+                    logger.error(f"❌ Failed to import CRMIntegration: {e}")
+                    raise
+                
+                try:
+                    from services.email_service import EmailService
+                    logger.info("✅ EmailService imported")
+                except Exception as e:
+                    logger.error(f"❌ Failed to import EmailService: {e}")
+                    raise
+                
+                try:
+                    from services.agent_assignment import AgentAssignment
+                    logger.info("✅ AgentAssignment imported")
+                except Exception as e:
+                    logger.error(f"❌ Failed to import AgentAssignment: {e}")
+                    raise
+                
                 services_available = True
                 logger.info("✅ All worker services imported successfully")
                 
                 logger.info("🔍 Initializing worker services...")
-                self.campaign_processor = CampaignProcessor()
-                logger.info("✅ CampaignProcessor initialized")
-                self.sqs_consumer = SQSConsumer()
-                logger.info("✅ SQSConsumer initialized")
-                self.call_summarizer = CallSummarizer()
-                logger.info("✅ CallSummarizer initialized")
-                self.email_service = EmailService()
-                logger.info("✅ EmailService initialized")
-                self.crm_integration = CRMIntegration()
-                logger.info("✅ CRMIntegration initialized")
-                self.agent_assignment = AgentAssignment()
-                logger.info("✅ AgentAssignment initialized")
+                
+                # Initialize services one by one with detailed error handling
+                try:
+                    self.campaign_processor = CampaignProcessor()
+                    logger.info("✅ CampaignProcessor initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize CampaignProcessor: {e}")
+                    raise
+                
+                try:
+                    self.sqs_consumer = SQSConsumer()
+                    logger.info("✅ SQSConsumer initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize SQSConsumer: {e}")
+                    raise
+                
+                try:
+                    self.call_summarizer = CallSummarizer()
+                    logger.info("✅ CallSummarizer initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize CallSummarizer: {e}")
+                    raise
+                
+                try:
+                    self.email_service = EmailService()
+                    logger.info("✅ EmailService initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize EmailService: {e}")
+                    raise
+                
+                try:
+                    self.crm_integration = CRMIntegration()
+                    logger.info("✅ CRMIntegration initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize CRMIntegration: {e}")
+                    raise
+                
+                try:
+                    self.agent_assignment = AgentAssignment()
+                    logger.info("✅ AgentAssignment initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize AgentAssignment: {e}")
+                    raise
+                
                 self.services_initialized = True
                 logger.info("✅ All services initialized")
                 
@@ -97,7 +161,12 @@ class WorkerService:
                 logger.error(f"❌ Service initialization failed: {e}")
                 logger.error(f"❌ Error type: {type(e).__name__}")
                 logger.error(f"❌ Error details: {str(e)}")
+                # Ensure services are not marked as initialized if any fail
                 self.services_initialized = False
+                # Clear any partially initialized services
+                for service_name in ['campaign_processor', 'sqs_consumer', 'call_summarizer', 'email_service', 'crm_integration', 'agent_assignment']:
+                    if hasattr(self, service_name):
+                        delattr(self, service_name)
         elif not services_available:
             logger.info("📝 Running in basic mode - services not available")
             self.services_initialized = True

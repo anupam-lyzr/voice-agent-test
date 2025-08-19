@@ -15,7 +15,7 @@ import time
 
 # Import shared models and utilities
 from shared.config.settings import settings
-from shared.models.call_session import CallSession, ConversationStage, ConversationTurn, ResponseType
+from shared.models.call_session import CallSession, ConversationStage, ConversationTurn, ResponseType, SessionMetrics
 from shared.models.call_session import CallStatus as CallStatusEnum
 from shared.models.client import Client, CallOutcome, CRMTag
 
@@ -95,11 +95,14 @@ class EnhancedTwiMLManager:
                     greeting_text = client_data_service.format_script_with_data(greeting_script, enhanced_data)
                 else:
                     # Ultimate fallback
-                    client_name = client_data.get("first_name", "")
-                    greeting_text = f"Hello {client_name}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
+                    client_name = client_data.get("first_name", "there")
+                    if client_name and client_name.lower() != "there":
+                        greeting_text = f"Hello {client_name}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
+                    else:
+                        greeting_text = "Hello there, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
             else:
                 # No client data fallback
-                greeting_text = "Hello, this is Alex from Altruis Advisor Group. We've helped you with your insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
+                greeting_text = "Hello there, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment?"
             
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -629,6 +632,9 @@ async def get_cached_session(call_sid: str) -> Optional[CallSession]:
                 doc = await db_client.database.call_sessions.find_one({"twilioCallSid": call_sid})
                 if doc:
                     logger.info(f"✅ Found session in database: {call_sid}")
+                    # Remove _id field to avoid validation errors
+                    if "_id" in doc:
+                        del doc["_id"]
                     return CallSession(**doc)
                 else:
                     logger.warning(f"⚠️ Session not found in database: {call_sid}")
@@ -649,7 +655,7 @@ async def enhanced_cache_session(session: CallSession):
             active_sessions[session.twilio_call_sid] = session
             logger.info(f"💾 Session saved to active_sessions: {session.twilio_call_sid}")
         else:
-            logger.error(f"❌ Cannot save session: twilio_call_sid is None")
+            logger.warning(f"⚠️ Cannot save session: twilio_call_sid is None")
             return
         
         # Try to save to Redis cache
@@ -665,11 +671,22 @@ async def enhanced_cache_session(session: CallSession):
         try:
             from shared.utils.database import db_client
             if db_client is not None and db_client.database is not None:
+                # Ensure twilio_call_sid is set before saving
+                if not session.twilio_call_sid:
+                    logger.warning(f"⚠️ twilio_call_sid is None, cannot save to database")
+                    return
+                
                 # Use model_dump with by_alias=True to handle field aliases properly
                 session_dict = session.model_dump(by_alias=True)
-                session_dict["_id"] = session.session_id
+                # Don't set _id manually - let MongoDB generate it
+                if "_id" in session_dict:
+                    del session_dict["_id"]
+                
+                # Use session_id as the query key if twilio_call_sid is not available
+                query_key = {"twilioCallSid": session.twilio_call_sid} if session.twilio_call_sid else {"session_id": session.session_id}
+                
                 await db_client.database.call_sessions.replace_one(
-                    {"twilioCallSid": session.twilio_call_sid},
+                    query_key,
                     session_dict,
                     upsert=True
                 )
@@ -687,57 +704,97 @@ async def enhanced_cache_session(session: CallSession):
 async def get_client_data_by_phone(phone_number: str) -> Optional[Dict[str, Any]]:
     """Get client data from database by phone number"""
     try:
-        # Clean phone number
+        logger.info(f"🔍 Looking up client data for phone: {phone_number}")
+        
+        # Clean phone number - remove all non-digits
         clean_phone = ''.join(filter(str.isdigit, phone_number))
+        logger.info(f"🔍 Cleaned phone number: {clean_phone}")
         
         # Try to get from database
         try:
             from shared.utils.database import db_client
             if db_client is not None and db_client.database is not None:
-                # Try exact match first
-                doc = await db_client.database.clients.find_one({"client.phone": phone_number})
+                logger.info(f"🔍 Database connection available, searching for client...")
                 
-                if not doc and len(clean_phone) >= 10:
-                    # Try with cleaned phone number as integer
-                    doc = await db_client.database.clients.find_one({"client.phone": int(clean_phone)})
+                # Try multiple phone number formats
+                search_variations = []
                 
-                if not doc and len(clean_phone) >= 10:
-                    # Try with cleaned phone number as string
-                    doc = await db_client.database.clients.find_one({"client.phone": clean_phone})
+                # Original format
+                search_variations.append(phone_number)
                 
-                if doc:
-                    client_info = doc.get("client", {})
-                    return {
-                        "first_name": client_info.get("firstName", client_info.get("first_name", "")),
-                        "last_name": client_info.get("lastName", client_info.get("last_name", "")),
-                        "phone": client_info.get("phone", ""),
-                        "email": client_info.get("email", ""),
-                        "tags": doc.get("tags", ""),
-                        "last_agent": client_info.get("lastAgent", client_info.get("last_agent", ""))
-                    }
+                # Clean digits only
+                if len(clean_phone) >= 10:
+                    search_variations.append(clean_phone)
+                    search_variations.append(int(clean_phone))
+                
+                # International format variations
+                if phone_number.startswith('+'):
+                    # Remove + and try
+                    without_plus = phone_number[1:]
+                    search_variations.append(without_plus)
+                    search_variations.append(int(without_plus))
+                
+                # Add +1 prefix if it's a 10-digit US number
+                if len(clean_phone) == 10:
+                    search_variations.append(f"+1{clean_phone}")
+                
+                # Try each variation
+                for variation in search_variations:
+                    logger.info(f"🔍 Trying phone variation: {variation}")
+                    
+                    # Try different field names that might contain phone
+                    search_queries = [
+                        {"client.phone": variation},
+                        {"phone": variation},
+                        {"phone_number": variation},
+                        {"client.phone_number": variation}
+                    ]
+                    
+                    for query in search_queries:
+                        doc = await db_client.database.clients.find_one(query)
+                        if doc:
+                            client_info = doc.get("client", {})
+                            first_name = client_info.get('firstName', client_info.get('first_name', ''))
+                            last_name = client_info.get('lastName', client_info.get('last_name', ''))
+                            logger.info(f"✅ Found client: {first_name} {last_name}")
+                            
+                            return {
+                                "first_name": first_name,
+                                "last_name": last_name,
+                                "phone": client_info.get("phone", client_info.get("phone_number", "")),
+                                "email": client_info.get("email", ""),
+                                "tags": doc.get("tags", ""),
+                                "last_agent": client_info.get("lastAgent", client_info.get("last_agent", ""))
+                            }
+                
+                # If no client found, let's debug what's in the database
+                logger.warning(f"⚠️ No client found in database for phone: {phone_number}")
+                logger.warning(f"⚠️ Tried variations: {search_variations}")
+                
+                # Get sample clients for debugging
+                try:
+                    sample_clients = await db_client.database.clients.find().limit(5).to_list(length=5)
+                    logger.info(f"🔍 Sample clients in database:")
+                    for i, client in enumerate(sample_clients):
+                        client_data = client.get('client', {})
+                        phone = client_data.get('phone', client_data.get('phone_number', 'No phone'))
+                        name = f"{client_data.get('firstName', client_data.get('first_name', ''))} {client_data.get('lastName', client_data.get('last_name', ''))}"
+                        logger.info(f"   {i+1}. {name} - Phone: {phone}")
+                except Exception as sample_error:
+                    logger.warning(f"⚠️ Could not get sample clients: {sample_error}")
+                    
+            else:
+                logger.warning(f"⚠️ Database not available for client lookup")
         except Exception as db_error:
             logger.warning(f"⚠️ Database client lookup failed: {db_error}")
         
-        # Fallback for test calls or unknown numbers
-        return {
-            "first_name": "Valued Customer",
-            "last_name": "",
-            "phone": phone_number,
-            "email": "",
-            "tags": "Test Call",
-            "last_agent": "our team"
-        }
+        # If no client found in database, return None instead of fallback
+        logger.warning(f"⚠️ No client data found in database for phone: {phone_number}")
+        return None
         
     except Exception as e:
         logger.error(f"❌ Error getting client data: {e}")
-        return {
-            "first_name": "",
-            "last_name": "",
-            "phone": phone_number,
-            "email": "",
-            "tags": "",
-            "last_agent": "our team"
-        }
+        return None
 
 async def create_or_get_session(
     call_sid: str, 
@@ -755,7 +812,7 @@ async def create_or_get_session(
         # Create new session
         session = CallSession(
             session_id=str(uuid.uuid4()),
-            twilio_call_sid=call_sid,
+            twilio_call_sid=call_sid,  # This should be the actual call_sid
             client_id=client_data.get("client_id", "unknown") if client_data else "unknown",
             phone_number=from_number,
             call_status=CallStatusEnum.INITIATED,
@@ -767,6 +824,11 @@ async def create_or_get_session(
             lyzr_agent_id=getattr(settings, 'lyzr_conversation_agent_id', 'default_agent'),
             lyzr_session_id=f"session_{uuid.uuid4().hex[:8]}"
         )
+        
+        # Ensure twilio_call_sid is set properly
+        if not session.twilio_call_sid:
+            logger.warning(f"⚠️ twilio_call_sid was not set properly, setting it manually: {call_sid}")
+            session.twilio_call_sid = call_sid
         
         return session
         
@@ -811,7 +873,7 @@ async def voice_webhook(
             logger.info(f"📱 Voicemail detected for {CallSid}")
             
             # Get client data for personalized voicemail
-            client_data = await get_client_data_by_phone(From)
+            client_data = await get_client_data_by_phone(To)
             
             return await EnhancedTwiMLManager.create_voicemail_response(client_data)
         
@@ -820,7 +882,19 @@ async def voice_webhook(
             logger.info(f"👤 Live person answered: {CallSid}")
             
             # Get client data to determine appropriate script
-            client_data = await get_client_data_by_phone(From)
+            client_data = await get_client_data_by_phone(To)
+            
+            # If no client data found, create a generic client data structure
+            if not client_data:
+                logger.warning(f"⚠️ No client data found for {To}, using generic greeting")
+                client_data = {
+                    "first_name": "there",
+                    "last_name": "",
+                    "phone": To,
+                    "email": "",
+                    "tags": "Unknown",
+                    "last_agent": "our team"
+                }
             
             # Create or update session
             session = await create_or_get_session(CallSid, From, To, client_data)
@@ -849,7 +923,7 @@ async def voice_webhook(
             logger.warning(f"⚠️ Unknown answer type: {AnsweredBy}, treating as human answer")
             
             # Get client data to determine appropriate script
-            client_data = await get_client_data_by_phone(From)
+            client_data = await get_client_data_by_phone(To)
             
             # Create or update session
             session = await create_or_get_session(CallSid, From, To, client_data)
@@ -1070,8 +1144,8 @@ async def status_webhook(
                 if session.started_at and session.completed_at:
                     duration = (session.completed_at - session.started_at).total_seconds()
                     if not hasattr(session, 'session_metrics'):
-                        session.session_metrics = {}
-                    session.session_metrics['total_call_duration_seconds'] = duration
+                        session.session_metrics = SessionMetrics()
+                    session.session_metrics.total_call_duration_seconds = duration
                 
                 # Determine final outcome based on conversation
                 if hasattr(session, 'conversation_turns') and session.conversation_turns:
@@ -1092,10 +1166,17 @@ async def status_webhook(
                 try:
                     from shared.utils.database import db_client
                     if db_client is not None and db_client.database is not None:
-                        session_dict = session.dict()
-                        session_dict["_id"] = session.session_id
+                        # Use model_dump with by_alias=True to handle field aliases properly
+                        session_dict = session.model_dump(by_alias=True)
+                        # Don't set _id manually - let MongoDB generate it
+                        if "_id" in session_dict:
+                            del session_dict["_id"]
+                        
+                        # Use session_id as the query key if twilio_call_sid is not available
+                        query_key = {"twilioCallSid": CallSid} if CallSid else {"session_id": session.session_id}
+                        
                         await db_client.database.call_sessions.replace_one(
-                            {"twilioCallSid": CallSid},
+                            query_key,
                             session_dict,
                             upsert=True
                         )
@@ -1174,8 +1255,10 @@ async def cleanup_session(call_sid: str):
             try:
                 from shared.utils.database import db_client
                 if db_client is not None and db_client.database is not None:
-                    session_dict = session.dict()
-                    session_dict["_id"] = session.session_id
+                    session_dict = session.model_dump(by_alias=True)
+                    # Don't set _id manually - let MongoDB generate it
+                    if "_id" in session_dict:
+                        del session_dict["_id"]
                     await db_client.database.call_sessions.replace_one(
                         {"twilioCallSid": call_sid},
                         session_dict,

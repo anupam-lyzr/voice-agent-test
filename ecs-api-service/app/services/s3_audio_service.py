@@ -134,6 +134,12 @@ class S3AudioService:
             
         except Exception as e:
             logger.error(f"❌ Failed to download from S3: {s3_key} - {e}")
+            # Add more detailed error information for debugging
+            if hasattr(e, 'response') and hasattr(e.response, 'Error'):
+                error_code = e.response['Error'].get('Code', 'Unknown')
+                error_message = e.response['Error'].get('Message', 'Unknown error')
+                logger.error(f"❌ S3 Error Code: {error_code}, Message: {error_message}")
+            logger.error(f"❌ S3 Bucket: {self.s3_bucket}, Region: {getattr(settings, 'aws_region', 'not_set')}")
             return None
     
     async def get_audio_files_batch(self, audio_files: list) -> Dict[str, Optional[Path]]:
