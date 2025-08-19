@@ -1,40 +1,25 @@
-# Multi-stage build to optimize space usage
-FROM python:3.11-alpine AS builder
+# In your API service Dockerfile
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk update && \
-    apk add --no-cache \
-        gcc \
-        musl-dev \
-        python3-dev \
-        libffi-dev \
-        openssl-dev
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Final stage
-FROM python:3.11-alpine
-
-WORKDIR /app
-
-# Install runtime dependencies only
-RUN apk update && \
-    apk add --no-cache \
-        curl \
-        ffmpeg
-
-# Copy Python packages from builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY app/ .
 
-# Create necessary directories
+# Copy your audio-generation directory with all audio files
+# COPY app/audio-generation /app/audio-generation
+
+# Ensure directories exist
 RUN mkdir -p static/audio/temp \
     audio-generation/segments \
     audio-generation/names/clients \
