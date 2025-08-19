@@ -3,12 +3,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ffmpeg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies with space optimization
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && apt-get autoremove -y
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
