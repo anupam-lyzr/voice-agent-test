@@ -234,11 +234,16 @@ class VoiceProcessor:
     async def _handle_memory_question(self, session: CallSession, start_time: float) -> Dict[str, Any]:
         """Handle 'I don't remember working with you' questions"""
         
-        agent_name = session.client_data.get("last_agent", "one of our agents")
+        agent_name = session.client_data.get("last_agent", "our team")
+        # Use specific agent name if available, otherwise use "our team"
+        if agent_name and agent_name != "our team":
+            agent_reference = f"{agent_name} here at Altruis"
+        else:
+            agent_reference = "one of our agents here at Altruis"
         
         return await self._create_response(
             response_text=(
-                f"No worries at all! You previously worked with {agent_name} here at Altruis "
+                f"No worries at all! You previously worked with {agent_reference} "
                 f"for your health insurance needs. We're a brokerage that helps people find "
                 f"the best coverage options. Since it's Open Enrollment season, I wanted to "
                 f"reach out to see if you'd like assistance this year. Are you interested?"
@@ -412,12 +417,18 @@ class VoiceProcessor:
         """Handle when user expresses initial interest - First 'Yes'"""
         logger.info("✅ Customer interested in service - Moving to SCHEDULING stage")
         
-        agent_name = session.client_data.get("last_agent", "your previous agent")
+        agent_name = session.client_data.get("last_agent", "our team")
+        # Use "them" for better flow if agent name is available, otherwise use "our team"
+        if agent_name and agent_name != "our team":
+            agent_reference = f"{agent_name} was the last agent you worked with here at Altruis"
+        else:
+            agent_reference = "one of our agents was the last agent you worked with here at Altruis"
+        
         session.conversation_stage = ConversationStage.SCHEDULING
         
         return await self._create_response(
             response_text=(
-                f"Great, looks like {agent_name} was the last agent you worked with here at Altruis – "
+                f"Great, looks like {agent_reference} – "
                 f"would you like to schedule a quick 15-minute discovery call with them to get reacquainted? "
                 f"A simple 'Yes' or 'No' will do!"
             ),
@@ -453,12 +464,18 @@ class VoiceProcessor:
         """Handle when user confirms they want to schedule - Second 'Yes'"""
         logger.info("✅ Customer confirmed scheduling - Ending call with success")
         
-        agent_name = session.client_data.get("last_agent", "your agent")
+        agent_name = session.client_data.get("last_agent", "our team")
+        # Use specific agent name if available, otherwise use "our team"
+        if agent_name and agent_name != "our team":
+            agent_reference = f"{agent_name}'s"
+        else:
+            agent_reference = "our team's"
+        
         session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
-                f"Perfect! You'll receive an email with {agent_name}'s available time slots. "
+                f"Perfect! You'll receive an email with {agent_reference} available time slots. "
                 f"Simply click on the time that works best for you. "
                 f"Thank you so much for your time today, and have a wonderful day!"
             ),
@@ -474,12 +491,18 @@ class VoiceProcessor:
         """Handle when user declines scheduling - Second 'No'"""
         logger.info("❌ Customer declined scheduling - Ending call")
         
-        agent_name = session.client_data.get("last_agent", "your agent")
+        agent_name = session.client_data.get("last_agent", "our team")
+        # Use specific agent name if available, otherwise use "our team"
+        if agent_name and agent_name != "our team":
+            agent_reference = agent_name
+        else:
+            agent_reference = "one of our agents"
+        
         session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
-                f"No problem, {agent_name} will reach out to you and the two of you can work "
+                f"No problem, {agent_reference} will reach out to you and the two of you can work "
                 f"together to determine the best next steps. We look forward to servicing you, "
                 f"have a wonderful day!"
             ),

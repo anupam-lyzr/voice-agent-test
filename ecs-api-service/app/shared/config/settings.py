@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     lyzr_api_key: Optional[str] = Field(default=None)
     
     # Voice Settings with defaults
-    default_voice_id: str = Field(default="iP95p4xoKVk53GoZ742B")
+    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0")
     voice_stability: float = Field(default=0.55)
     voice_similarity_boost: float = Field(default=0.70)
     voice_style: float = Field(default=0.2)

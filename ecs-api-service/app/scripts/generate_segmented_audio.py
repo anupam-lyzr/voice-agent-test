@@ -53,16 +53,16 @@ def convert_phone_to_natural_speech(phone: str) -> str:
 
 # UPDATED SCRIPT SEGMENTS - Now includes Non-Medicare variants
 SCRIPT_SEGMENTS = {
+    # HELLO SEGMENT (for natural flow with client names)
+    "hello": "Hello",
+    
     # NON-MEDICARE GREETING SEGMENTS (New script)
-    "non_medicare_greeting_start": "Hello ",
     "non_medicare_greeting_middle": ", Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group, we've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? A simple 'Yes' or 'No' is fine, and remember, our services are completely free of charge.",
     
     # MEDICARE GREETING SEGMENTS (Original script)
-    "medicare_greeting_start": "Hello ",
     "medicare_greeting_middle": ", this is Alex from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
     
     # DEFAULT/FALLBACK GREETING (for unknown client types)
-    "default_greeting_start": "Hello ",
     "default_greeting_middle": ", this is Alex from Altruis Advisor Group. We've helped you with your insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
     
     # AGENT INTRODUCTION SEGMENTS (shared across all client types)
@@ -71,7 +71,7 @@ SCRIPT_SEGMENTS = {
     
     # SCHEDULE CONFIRMATION SEGMENTS (shared)
     "schedule_start": "Perfect! I'll send you an email shortly with ",
-    "schedule_middle": "'s available time slots. You can review the calendar and choose a time that works best for your schedule. Thank you so much for your time today, and have a wonderful day!",
+    "schedule_middle": "available time slots. You can review the calendar and choose a time that works best for your schedule. Thank you so much for your time today, and have a wonderful day!",
     
     # NO SCHEDULE FOLLOW-UP SEGMENTS (shared)
     "no_schedule_start": "No problem, ",
@@ -87,15 +87,13 @@ SCRIPT_SEGMENTS = {
     "not_interested_start": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
     
     # VOICEMAIL SEGMENTS - Non-Medicare version (Updated)
-    "non_medicare_voicemail_start": "Hello ",
+    "voicemail_start": "Hello",
     "non_medicare_voicemail_middle": f", Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
     
     # VOICEMAIL SEGMENTS - Medicare version (Updated)
-    "medicare_voicemail_start": "Hello ",
     "medicare_voicemail_middle": f", Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
     
     # DEFAULT VOICEMAIL (Updated)
-    "default_voicemail_start": "Hello ",
     "default_voicemail_middle": f", Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at {convert_phone_to_natural_speech('833.227.8500')}. We look forward to hearing from you - take care!",
     
     # STATIC RESPONSES (no concatenation needed)
@@ -268,10 +266,59 @@ async def generate_missing_audio():
             # Small delay between requests
             await asyncio.sleep(0.5)
     
+    # Generate "Hello {client_name}" combinations for natural flow
+    await generate_hello_combinations()
+    
     # Update manifest
     await update_manifest()
     
     logger.info("\n✅ Audio generation complete!")
+
+async def generate_hello_combinations():
+    """Generate 'Hello {client_name}' combinations for natural flow"""
+    
+    logger.info(f"\n👋 Generating 'Hello [CLIENT_NAME]' combinations for natural flow...")
+    logger.info(f"📁 Client names directory: {CLIENT_NAMES_DIR}")
+    logger.info(f"👥 Total client names to process: {len(COMMON_CLIENT_NAMES)}")
+    
+    # Create a special directory for hello combinations
+    hello_combinations_dir = CLIENT_NAMES_DIR / "hello_combinations"
+    hello_combinations_dir.mkdir(exist_ok=True)
+    logger.info(f"📂 Hello combinations directory: {hello_combinations_dir}")
+    
+    generated_count = 0
+    existing_count = 0
+    
+    for name in COMMON_CLIENT_NAMES:
+        # Check if this combination already exists
+        hello_filename = f"hello_{name.lower()}.mp3"
+        hello_filepath = hello_combinations_dir / hello_filename
+        
+        if hello_filepath.exists():
+            logger.info(f"✅ Hello {name} already exists: {hello_filepath}")
+            existing_count += 1
+            continue
+        
+        # Generate "Hello {name}" as a single phrase
+        hello_text = f"Hello {name}"
+        logger.info(f"🎵 Generating: {hello_text}")
+        
+        result = await elevenlabs_client.generate_speech(hello_text)
+        
+        if result.get("success") and result.get("audio_data"):
+            with open(hello_filepath, "wb") as f:
+                f.write(result["audio_data"])
+            logger.info(f"✅ Generated: {hello_text} -> {hello_filepath}")
+            generated_count += 1
+        else:
+            logger.error(f"❌ Failed: {hello_text} - {result.get('error', 'Unknown error')}")
+        
+        # Small delay between requests
+        await asyncio.sleep(0.5)
+    
+    logger.info(f"✅ Generated {generated_count} new 'Hello [CLIENT_NAME]' combinations")
+    logger.info(f"✅ Skipped {existing_count} 'Hello [CLIENT_NAME]' combinations (already exist)")
+    logger.info(f"📊 Total processed: {generated_count + existing_count} out of {len(COMMON_CLIENT_NAMES)} client names")
 
 async def update_manifest():
     """Update the segments manifest with new templates"""
@@ -296,17 +343,17 @@ async def update_manifest():
             "files": sorted(agent_names)
         },
         "concatenation_templates": {
-            # Non-Medicare templates
-            "non_medicare_greeting": ["non_medicare_greeting_start", "[CLIENT_NAME]", "non_medicare_greeting_middle"],
-            "non_medicare_voicemail": ["non_medicare_voicemail_start", "[CLIENT_NAME]", "non_medicare_voicemail_middle"],
+            # Non-Medicare templates - Updated to use hello combinations
+            "non_medicare_greeting": ["[CLIENT_NAME]", "non_medicare_greeting_middle"],
+            "non_medicare_voicemail": ["[CLIENT_NAME]", "non_medicare_voicemail_middle"],
             
-            # Medicare templates (for future use)
-            "medicare_greeting": ["medicare_greeting_start", "[CLIENT_NAME]", "medicare_greeting_middle"],
-            "medicare_voicemail": ["medicare_voicemail_start", "[CLIENT_NAME]", "medicare_voicemail_middle"],
+            # Medicare templates - Updated to use hello combinations
+            "medicare_greeting": ["[CLIENT_NAME]", "medicare_greeting_middle"],
+            "medicare_voicemail": ["[CLIENT_NAME]", "medicare_voicemail_middle"],
             
-            # Default templates
-            "default_greeting": ["default_greeting_start", "[CLIENT_NAME]", "default_greeting_middle"],
-            "default_voicemail": ["default_voicemail_start", "[CLIENT_NAME]", "default_voicemail_middle"],
+            # Default templates - Updated to use hello combinations
+            "default_greeting": ["[CLIENT_NAME]", "default_greeting_middle"],
+            "default_voicemail": ["[CLIENT_NAME]", "default_voicemail_middle"],
             
             # Shared templates (agent-based)
             "agent_intro": ["agent_intro_start", "[AGENT_NAME]", "agent_intro_middle"],
@@ -417,6 +464,9 @@ async def generate_all_audio():
             logger.error(f"❌ Failed: {name}")
         
         await asyncio.sleep(0.5)
+    
+    # Generate "Hello {client_name}" combinations for natural flow
+    await generate_hello_combinations()
     
     # Update manifest
     await update_manifest()

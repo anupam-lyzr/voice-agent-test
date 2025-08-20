@@ -34,7 +34,7 @@ def create_voice_twiml(
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
-    <Gather action="{gather_action}" method="POST" input="speech" timeout="{timeout}" speechTimeout="{speech_timeout}">
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="{timeout}" speechTimeout="{speech_timeout}" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
         <Say voice="{MALE_VOICE}">Please respond.</Say>
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't hear you. Thank you for calling. Goodbye.</Say>
@@ -276,7 +276,7 @@ def create_no_speech_twiml(
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{clean_text}</Say>
-    <Gather action="/twilio/process-speech" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="/twilio/process-speech" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true" interruptionAction="/twilio/handle-interruption">
         <Pause length="3"/>
     </Gather>
     <Say voice="{MALE_VOICE}">I still can't hear you. I'll call you back later. Goodbye.</Say>
@@ -291,7 +291,7 @@ def create_interruption_acknowledgment_twiml(acknowledgment: str = "Yes? How can
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{clean_acknowledgment}</Say>
-    <Gather action="/twilio/process-speech" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="/twilio/process-speech" method="POST" input="speech" timeout="8" speechTimeout="auto" enhanced="true" interruptionAction="/twilio/handle-interruption">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">How can I assist you further?</Say>

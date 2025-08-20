@@ -68,7 +68,7 @@ class EnhancedTwiMLManager:
                     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
     <Pause length="1"/>
@@ -107,7 +107,7 @@ class EnhancedTwiMLManager:
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{greeting_text}</Say>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
     <Pause length="1"/>
@@ -126,7 +126,7 @@ class EnhancedTwiMLManager:
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{emergency_greeting}</Say>
-    <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto">
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
     </Gather>
     <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
     <Hangup/>
@@ -147,6 +147,9 @@ class EnhancedTwiMLManager:
             try:
                 from services.hybrid_tts import HybridTTSService
                 hybrid_tts = HybridTTSService()
+                
+                # Import client data service
+                from services.client_data_service import client_data_service
                 
                 # Analyze client data to determine appropriate voicemail script
                 if client_data:
@@ -288,7 +291,7 @@ class EnhancedTwiMLManager:
                 twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{text}</Say>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto">
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
@@ -346,7 +349,7 @@ class EnhancedTwiMLManager:
                         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">I didn't catch that. Could you please repeat your response?</Say>
@@ -372,7 +375,7 @@ class EnhancedTwiMLManager:
                 twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{MALE_VOICE}">{fallback_text}</Say>
-    <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto">
+    <Gather action="{gather_action}" method="POST" input="speech" timeout="5" speechTimeout="auto" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">Thank you for calling. Goodbye.</Say>
@@ -463,7 +466,7 @@ class EnhancedTwiMLManager:
                     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{audio_url}</Play>
-    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true">
+    <Gather action="{gather_action}" method="POST" input="speech" actionOnEmptyResult="true" timeout="8" speechTimeout="auto" enhanced="true" interruptionAction="{gather_action.replace('process-speech', 'handle-interruption')}">
         <Pause length="2"/>
     </Gather>
     <Say voice="{MALE_VOICE}">Thank you for calling. Please call us back at 8-3-3, 2-2-7, 8-5-0-0. Goodbye.</Say>
@@ -865,10 +868,12 @@ async def voice_webhook(
 ):
     """Enhanced voice webhook with voicemail detection, start delay, and client type support"""
     
-    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From} - AnsweredBy: {AnsweredBy}")
+    logger.info(f"📞 Voice webhook: {CallSid} - Status: {CallStatus} - From: {From} - To: {To} - AnsweredBy: {AnsweredBy}")
+    logger.info(f"🔍 Machine detection debug - AnsweredBy: '{AnsweredBy}' (type: {type(AnsweredBy)})")
     
     try:
         # Handle answering machine detection
+        logger.info(f"🔍 Checking machine detection - AnsweredBy: '{AnsweredBy}'")
         if AnsweredBy == "machine":
             logger.info(f"📱 Voicemail detected for {CallSid}")
             
@@ -965,6 +970,7 @@ async def process_speech_webhook(
     """Process customer speech with enhanced voice processor and silence detection"""
     
     logger.info(f"🗣️ Processing speech: {CallSid} - '{SpeechResult}' - Confidence: {Confidence}")
+    logger.info(f"🔍 Speech debug - SpeechResult: '{SpeechResult}' (type: {type(SpeechResult)}) - Unstable: '{UnstableSpeechResult}'")
     
     try:
         # Get session
@@ -1000,6 +1006,8 @@ async def process_speech_webhook(
                 logger.error(f"❌ Failed to create emergency session: {emergency_error}")
                 return await EnhancedTwiMLManager.create_emergency_twiml()
         
+        logger.info(f"✅ Session found for speech: {CallSid} - Stage: {session.conversation_stage}")
+        
         # Handle silence (no speech detected)
         if not SpeechResult or SpeechResult.strip() == "":
             session.no_speech_count += 1
@@ -1024,6 +1032,8 @@ async def process_speech_webhook(
             session=session,
             confidence=Confidence or 0.0
         )
+        
+        logger.info(f"🔄 Speech processed - Response: '{process_result.get('response_text', '')}' - Category: {process_result.get('response_category', '')}")
         
         # Update conversation history
         turn = ConversationTurn(
@@ -1069,7 +1079,8 @@ async def handle_interruption(
 ):
     """Handle customer interruptions while agent is speaking"""
     
-    logger.info(f"🛑 Interruption detected: {CallSid} - '{SpeechResult}'")
+    logger.info(f"🛑 Interruption detected: {CallSid} - '{SpeechResult}' - Confidence: {Confidence}")
+    logger.info(f"🔍 Interruption debug - SpeechResult: '{SpeechResult}' (type: {type(SpeechResult)})")
     
     try:
         session = active_sessions.get(CallSid) or await get_cached_session(CallSid)
@@ -1078,6 +1089,8 @@ async def handle_interruption(
             logger.error(f"❌ Session not found for interruption: {CallSid}")
             return await EnhancedTwiMLManager.create_emergency_twiml()
         
+        logger.info(f"✅ Session found for interruption: {CallSid} - Stage: {session.conversation_stage}")
+        
         # Process interruption with voice processor
         process_result = await voice_processor.process_customer_input(
             customer_input=SpeechResult or "",
@@ -1085,6 +1098,8 @@ async def handle_interruption(
             confidence=Confidence or 0.0,
             is_interruption=True
         )
+        
+        logger.info(f"🔄 Interruption processed - Response: '{process_result.get('response_text', '')}' - Category: {process_result.get('response_category', '')}")
         
         # Update conversation turn for interruption
         turn = ConversationTurn(
@@ -1111,6 +1126,8 @@ async def handle_interruption(
         
     except Exception as e:
         logger.error(f"❌ Interruption handling error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return await EnhancedTwiMLManager.create_emergency_twiml()
 
 @router.post("/status")

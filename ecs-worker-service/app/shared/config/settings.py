@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     max_call_attempts: int = Field(default=6, env="MAX_CALL_ATTEMPTS")
     
     # Voice Processing Settings
-    default_voice_id: str = Field(default="iP95p4xoKVk53GoZ742B", env="VOICE_ID")  # Adam voice
+    default_voice_id: str = Field(default="xtENCNNHEgtE8xBjLMt0", env="VOICE_ID")  # Adam voice
     voice_stability: float = Field(default=0.35, env="VOICE_STABILITY")
     voice_similarity_boost: float = Field(default=0.75, env="VOICE_SIMILARITY_BOOST") 
     voice_style: float = Field(default=0.45, env="VOICE_STYLE")

@@ -52,12 +52,20 @@ class SegmentedAudioService:
         # Updated templates based on your audio files
         self.templates = {
             "greeting": {
-                "segments": ["greeting_start", "[CLIENT_NAME]", "greeting_middle"],
+                "segments": ["[CLIENT_NAME]", "greeting_middle"],
                 "description": "Personalized greeting with client name"
             },
             "non_medicare_greeting": {
-                "segments": ["non_medicare_greeting_start", "[CLIENT_NAME]", "non_medicare_greeting_middle"],
+                "segments": ["[CLIENT_NAME]", "non_medicare_greeting_middle"],
                 "description": "Non-Medicare client greeting with client name"
+            },
+            "medicare_greeting": {
+                "segments": ["[CLIENT_NAME]", "medicare_greeting_middle"],
+                "description": "Medicare client greeting with client name"
+            },
+            "default_greeting": {
+                "segments": ["[CLIENT_NAME]", "default_greeting_middle"],
+                "description": "Default greeting with client name"
             },
             "agent_intro": {
                 "segments": ["agent_intro_start", "[AGENT_NAME]", "agent_intro_middle"],
@@ -93,8 +101,16 @@ class SegmentedAudioService:
                 "description": "Clarification request"
             },
             "voicemail": {
-                "segments": ["voicemail_start", "[CLIENT_NAME]", "voicemail_middle"],
+                "segments": ["[CLIENT_NAME]", "default_voicemail_middle"],
                 "description": "Personalized voicemail with client name and natural phone number"
+            },
+            "non_medicare_voicemail": {
+                "segments": ["[CLIENT_NAME]", "non_medicare_voicemail_middle"],
+                "description": "Non-Medicare voicemail with client name"
+            },
+            "medicare_voicemail": {
+                "segments": ["[CLIENT_NAME]", "medicare_voicemail_middle"],
+                "description": "Medicare voicemail with client name"
             }
         }
         
@@ -170,6 +186,8 @@ class SegmentedAudioService:
         
         start_time = time.time()
         
+        logger.info(f"🎯 get_personalized_audio called - Template: '{template_name}', Client: '{client_name}', Context: {context}")
+        
         try:
             # Check if template exists
             if template_name not in self.templates:
@@ -177,6 +195,7 @@ class SegmentedAudioService:
                 return {"success": False, "error": f"Unknown template: {template_name}"}
             
             template = self.templates[template_name]
+            logger.info(f"📋 Template segments: {template['segments']}")
             
             # Check if concatenation is needed
             if not self._needs_concatenation(template["segments"]):
@@ -209,11 +228,15 @@ class SegmentedAudioService:
                 }
             
             # Generate audio by concatenation
+            concatenation_context = {"template_name": template_name, **(context or {})}
+            logger.info(f"🔧 Concatenation context: {concatenation_context}")
+            
             audio_url = await self._concatenate_segments(
                 template["segments"], 
                 client_name, 
                 agent_name,
-                cache_key
+                cache_key,
+                concatenation_context
             )
             
             if audio_url:
@@ -275,7 +298,8 @@ class SegmentedAudioService:
         segments: List[str], 
         client_name: Optional[str],
         agent_name: Optional[str],
-        cache_key: str
+        cache_key: str,
+        context: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """Concatenate audio segments with names"""
         
@@ -285,8 +309,8 @@ class SegmentedAudioService:
             
             for segment in segments:
                 if segment == "[CLIENT_NAME]" and client_name:
-                    # Get client name audio
-                    client_file = await self._get_name_audio(client_name, "client")
+                    # Get client name audio (this will now return "Hello {client_name}" combination or just name based on context)
+                    client_file = await self._get_name_audio(client_name, "client", context)
                     if client_file:
                         audio_files.append(client_file)
                     else:
@@ -295,7 +319,7 @@ class SegmentedAudioService:
                 
                 elif segment == "[AGENT_NAME]" and agent_name:
                     # Get agent name audio
-                    agent_file = await self._get_name_audio(agent_name, "agent")
+                    agent_file = await self._get_name_audio(agent_name, "agent", context)
                     if agent_file:
                         audio_files.append(agent_file)
                     else:
@@ -346,12 +370,41 @@ class SegmentedAudioService:
             logger.error(f"❌ Concatenation error: {e}")
             return None
     
-    async def _get_name_audio(self, name: str, name_type: str) -> Optional[str]:
+    async def _get_name_audio(self, name: str, name_type: str, context: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Get audio file for a name (client or agent)"""
         
         try:
             if name_type == "client":
-                # Try exact match first
+                # Check if we should use "Hello {name}" combination based on context
+                should_use_hello_combination = False
+                template_name = context.get("template_name", "") if context else ""
+                
+                logger.info(f"🔍 Context check for client '{name}' - Template: '{template_name}'")
+                
+                # Only use "Hello {name}" for greeting and voicemail templates
+                if template_name in ["greeting", "non_medicare_greeting", "medicare_greeting", "default_greeting", 
+                                   "voicemail", "non_medicare_voicemail", "medicare_voicemail"]:
+                    should_use_hello_combination = True
+                    logger.info(f"✅ Using 'Hello {name}' combination for template: {template_name}")
+                else:
+                    logger.info(f"ℹ️ Using individual client name for template: {template_name}")
+                
+                if should_use_hello_combination:
+                    # First, try "Hello {name}" combination for natural flow
+                    hello_combinations_dir = self.client_names_dir / "hello_combinations"
+                    hello_combinations_dir.mkdir(exist_ok=True)  # Ensure directory exists
+                    hello_filename = f"hello_{name.lower()}.mp3"
+                    hello_filepath = hello_combinations_dir / hello_filename
+                    
+                    if hello_filepath.exists():
+                        logger.info(f"✅ Using existing 'Hello {name}' combination for greeting/voicemail")
+                        return str(hello_filepath)
+                    else:
+                        # Generate "Hello {name}" combination on-demand
+                        logger.info(f"🔄 Generating 'Hello {name}' combination on-demand")
+                        return await self._generate_hello_combination(name)
+                
+                # For all other contexts, use just the client name (no "Hello" prefix)
                 filename = f"{name.lower()}.mp3"
                 
                 # Use S3 service if available
@@ -438,6 +491,40 @@ class SegmentedAudioService:
         
         except Exception as e:
             logger.error(f"❌ Name generation error: {e}")
+            return None
+    
+    async def _generate_hello_combination(self, name: str) -> Optional[str]:
+        """Generate 'Hello {client_name}' combination on-demand"""
+        
+        try:
+            # Import ElevenLabs client
+            from services.elevenlabs_client import elevenlabs_client
+            
+            # Generate "Hello {name}" as a single phrase
+            hello_text = f"Hello {name}"
+            logger.info(f"🎵 Generating: {hello_text}")
+            
+            result = await elevenlabs_client.generate_speech(hello_text)
+            
+            if result.get("success") and result.get("audio_data"):
+                # Save to hello_combinations directory
+                hello_combinations_dir = self.client_names_dir / "hello_combinations"
+                hello_combinations_dir.mkdir(exist_ok=True)
+                
+                hello_filename = f"hello_{name.lower()}.mp3"
+                hello_filepath = hello_combinations_dir / hello_filename
+                
+                with open(hello_filepath, "wb") as f:
+                    f.write(result["audio_data"])
+                
+                logger.info(f"✅ Generated 'Hello {name}' combination: {hello_filepath}")
+                return str(hello_filepath)
+            else:
+                logger.error(f"❌ Failed to generate 'Hello {name}' combination: {result.get('error', 'Unknown error')}")
+                return None
+        
+        except Exception as e:
+            logger.error(f"❌ Hello combination generation error: {e}")
             return None
     
     async def _ffmpeg_concatenate(self, audio_files: List[str], output_path: str) -> bool:
@@ -537,22 +624,27 @@ class SegmentedAudioService:
         """Build full text for dynamic TTS based on AAG script"""
         
         templates = {
+            # Greeting templates
             "greeting": f"Hello {client_name or '[NAME]'}, Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+            "non_medicare_greeting": f"Hello {client_name or '[NAME]'}, Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group, we've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? A simple 'Yes' or 'No' is fine, and remember, our services are completely free of charge.",
+            "medicare_greeting": f"Hello {client_name or '[NAME]'}, this is Alex from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+            "default_greeting": f"Hello {client_name or '[NAME]'}, this is Alex from Altruis Advisor Group. We've helped you with your insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
             
+            # Voicemail templates
+            "voicemail": f"Hello {client_name or '[NAME]'}, Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!",
+            "non_medicare_voicemail": f"Hello {client_name or '[NAME]'}, Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!",
+            "medicare_voicemail": f"Hello {client_name or '[NAME]'}, Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!",
+            
+            # Agent-based templates
             "agent_intro": f"Great, looks like {agent_name or '[AGENT]'} was the last agent you worked with here at Altruis. Would you like to schedule a quick 15-minute discovery call with them to get reacquainted? A simple Yes or No will do!",
-            
-            "schedule_confirmation": f"Perfect! I'll send you an email shortly with {agent_name}'s available time slots. You can review the calendar and choose a time that works best for your schedule. Thank you so much for your time today, and have a wonderful day!",
-            
+            "schedule_confirmation": f"Perfect! I'll send you an email shortly with {agent_name or '[AGENT]'}'s available time slots. You can review the calendar and choose a time that works best for your schedule. Thank you so much for your time today, and have a wonderful day!",
             "no_schedule_followup": f"No problem, {agent_name or '[AGENT]'} will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!",
             
+            # Static responses
             "not_interested": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
-            
             "dnc_confirmation": "Understood, we will make sure you are removed from all future communications and send you a confirmation email once that is done. Our contact details will be in that email as well, so if you do change your mind in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
-            
             "keep_communications": "Great, we're happy to keep you informed throughout the year regarding the ever-changing world of health insurance. If you'd like to connect with one of our insurance experts in the future please feel free to reach out – we are always here to help and our service is always free of charge. Have a wonderful day!",
-            
             "goodbye": "Thank you for your time today. Have a wonderful day!",
-            
             "clarification": "I want to make sure I understand correctly. Can we help service you this year during Open Enrollment? Please say Yes if you're interested, or No if you're not interested."
         }
         

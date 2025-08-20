@@ -186,8 +186,8 @@ class EmailService:
             success = await self._send_email(
                 to_email=client_email,
                 subject=email_content["subject"],
-                html_content=email_content["body"],
-                text_content=email_content["body"]
+                html_content=email_content.get("html_content", email_content.get("body", "")),
+                text_content=email_content.get("text_content", email_content.get("body", ""))
             )
             
             if success:
@@ -208,24 +208,69 @@ class EmailService:
         client_name = client_name.strip() if client_name else "there"
         
         if stage == "agent_will_reach_out":
-            agent_name = call_summary.get("agent_name", "your agent")
+            agent_name = call_summary.get("agent_name", "our team")
+            # Use specific agent name if available, otherwise use "our team"
+            if agent_name and agent_name != "our team":
+                agent_reference = agent_name
+            else:
+                agent_reference = "one of our agents"
+            
             return {
                 "subject": "Thank you for your interest - Altruis Advisor Group",
-                "body": f"""CLIENT NAME,
-Thank you for the quick response😊! {agent_name} will be contacting you shortly to schedule a 15 discovery call to get reacquainted with your health insurance situation and determine the next steps. 
+                "html_content": f"""<p>Dear {client_name},</p>
+
+<p>Thank you for the quick response😊! {agent_reference} will be contacting you shortly to schedule a 15-minute discovery call to get reacquainted with your health insurance situation and determine the next steps.</p>
+
+<p>We are looking forward to assisting you!</p>
+
+<p>Have a wonderful day!</p>
+
+<p>Alex<br>
+{self._get_email_signature()}</p>""",
+                "text_content": f"""Dear {client_name},
+
+Thank you for the quick response😊! {agent_reference} will be contacting you shortly to schedule a 15-minute discovery call to get reacquainted with your health insurance situation and determine the next steps.
+
 We are looking forward to assisting you!
+
 Have a wonderful day!
+
 Alex
 {self._get_email_signature()}"""
             }
         
         elif stage == "interested_no_schedule":
-            agent_name = call_summary.get("agent_name", "your agent")
+            agent_name = call_summary.get("agent_name", "our team")
+            # Use specific agent name if available, otherwise use "our team"
+            if agent_name and agent_name != "our team":
+                agent_reference = agent_name
+            else:
+                agent_reference = "one of our agents"
+            
             return {
                 "subject": "Thank you for your interest - Altruis Advisor Group",
-                "body": f"""Dear {client_name},
+                "html_content": f"""<p>Dear {client_name},</p>
 
-Thank you for your interest in reviewing your health insurance options! {agent_name} will reach out to you directly to discuss your specific needs and schedule a convenient time for your discovery call.
+<p>Thank you for your interest in reviewing your health insurance options! {agent_reference} will reach out to you directly to discuss your specific needs and schedule a convenient time for your discovery call.</p>
+
+<p><strong>What to Expect:</strong></p>
+<ul>
+<li>A personalized review of your current situation</li>
+<li>Discussion of available options and potential savings</li>
+<li>No-obligation consultation - our services are always free</li>
+<li>Flexible scheduling to fit your schedule</li>
+</ul>
+
+<p>{agent_reference} will contact you within the next 24-48 hours. If you need to reach us sooner, please call us at 833.227.8500.</p>
+
+<p>We look forward to helping you find the best health insurance solution!</p>
+
+<p>Kind Regards,<br>
+Alex<br>
+{self._get_email_signature()}</p>""",
+                "text_content": f"""Dear {client_name},
+
+Thank you for your interest in reviewing your health insurance options! {agent_reference} will reach out to you directly to discuss your specific needs and schedule a convenient time for your discovery call.
 
 What to Expect:
 • A personalized review of your current situation
@@ -233,7 +278,7 @@ What to Expect:
 • No-obligation consultation - our services are always free
 • Flexible scheduling to fit your schedule
 
-{agent_name} will contact you within the next 24-48 hours. If you need to reach us sooner, please call us at 833.227.8500.
+{agent_reference} will contact you within the next 24-48 hours. If you need to reach us sooner, please call us at 833.227.8500.
 
 We look forward to helping you find the best health insurance solution!
 
@@ -244,8 +289,14 @@ Alex
         
         elif stage == "open_slots_email":
             # This will be handled by Google Calendar integration
-            agent_name = call_summary.get("agent_name", "your agent")
+            agent_name = call_summary.get("agent_name", "our team")
             available_slots = call_summary.get("available_slots", [])
+            
+            # Use specific agent name if available, otherwise use "our team"
+            if agent_name and agent_name != "our team":
+                agent_reference = agent_name
+            else:
+                agent_reference = "our team"
             
             # Format the available slots
             slots_html = ""
@@ -258,12 +309,31 @@ Alex
                 slots_html = '<p><em>No available slots found. Please contact us directly.</em></p>'
             
             return {
-                "subject": f"Schedule your discovery call with {agent_name} - Altruis Advisor Group",
-                "body": f"""Dear {client_name},
+                "subject": f"Schedule your discovery call with {agent_reference} - Altruis Advisor Group",
+                "html_content": f"""<p>Dear {client_name},</p>
 
-{agent_name} has the following available time slots for your 15-minute discovery call:
+<p>{agent_reference} has the following available time slots for your 15-minute discovery call:</p>
 
 {slots_html}
+
+<p>Please click on the time that works best for you to schedule your call.</p>
+
+<p><strong>What to Expect:</strong></p>
+<ul>
+<li>A review of your current policy</li>
+<li>A review of your personal situation and insurance needs</li>
+<li>General Q & A session</li>
+<li>Identify next steps and schedule follow up call</li>
+</ul>
+
+<p><strong>Need to Reschedule</strong> - Please let us know 24 hours in advance and we will be happy to accommodate you.</p>
+
+<p>Kind Regards,<br>
+Alex<br>
+{self._get_email_signature()}</p>""",
+                "text_content": f"""Dear {client_name},
+
+{agent_reference} has the following available time slots for your 15-minute discovery call:
 
 Please click on the time that works best for you to schedule your call.
 
@@ -281,19 +351,51 @@ Alex
             }
         
         elif stage == "meeting_scheduled":
-            agent_name = call_summary.get("agent_name", "your agent")
+            agent_name = call_summary.get("agent_name", "our team")
             meeting_time = call_summary.get("meeting_time", "TBD")
+            
+            # Use specific agent name if available, otherwise use "our team"
+            if agent_name and agent_name != "our team":
+                agent_reference = agent_name
+            else:
+                agent_reference = "one of our agents"
+            
             return {
                 "subject": "Your Discovery Call has been scheduled - Altruis Advisor Group",
-                "body": f"""Dear {client_name},
+                "html_content": f"""<p>Dear {client_name},</p>
+
+<p>Your Discovery Call has been scheduled, we are looking forward to assisting you!</p>
+
+<p><strong>Meeting Details:</strong></p>
+<ul>
+<li>Date & Time - {meeting_time}</li>
+<li>Duration - 15 minutes</li>
+<li>Format - Voice Call</li>
+<li>Agent - {agent_reference}</li>
+</ul>
+
+<p><strong>What to Expect:</strong></p>
+<ul>
+<li>A review of your current policy</li>
+<li>A review of your personal situation and insurance needs</li>
+<li>General Q & A session</li>
+<li>Identify next steps and schedule follow up call</li>
+</ul>
+
+<p><strong>Need to Reschedule</strong> - Please let us know 24 hours in advance and we will be happy to accommodate you.</p>
+
+<p>Kind Regards,<br>
+{agent_name}<br>
+{self._get_agent_signature(agent_name)}</p>""",
+                "text_content": f"""Dear {client_name},
 
 Your Discovery Call has been scheduled, we are looking forward to assisting you!
 
 Meeting Details:
-Date & Time - {meeting_time}
-Duration - 15 minutes
-Format - Voice Call
-Agent - {agent_name}
+• Date & Time - {meeting_time}
+• Duration - 15 minutes
+• Format - Voice Call
+• Agent - {agent_reference}
 
 What to Expect:
 • A review of your current policy
@@ -311,10 +413,26 @@ Kind Regards,
         elif stage == "keep_communications":
             return {
                 "subject": "Thank you for your time - Altruis Advisor Group",
-                "body": f"""Hello {client_name}, 
-Thank you for your time today! As requested, we will continue to keep you up to date with the latest and greatest health insurance information. If you'd like to connect with one of our insurance experts at any time, please feel free to reach out. We are always here to help and our services are always free of charge.  
+                "html_content": f"""<p>Hello {client_name},</p>
+
+<p>Thank you for your time today! As requested, we will continue to keep you up to date with the latest and greatest health insurance information.</p>
+
+<p>If you'd like to connect with one of our insurance experts at any time, please feel free to reach out. We are always here to help and our services are always free of charge.</p>
+
+<p>service@altruisadvisor.com / 833.227.8500</p>
+
+<p>Kind Regards,<br>
+Alex<br>
+{self._get_email_signature()}</p>""",
+                "text_content": f"""Hello {client_name},
+
+Thank you for your time today! As requested, we will continue to keep you up to date with the latest and greatest health insurance information.
+
+If you'd like to connect with one of our insurance experts at any time, please feel free to reach out. We are always here to help and our services are always free of charge.
+
 service@altruisadvisor.com / 833.227.8500
-Kind Regards, 
+
+Kind Regards,
 Alex
 {self._get_email_signature()}"""
             }
@@ -322,9 +440,21 @@ Alex
         elif stage == "dnc_confirmation":
             return {
                 "subject": "You've been removed from our calling list - Altruis Advisor Group",
-                "body": f"""Hello {client_name},
-We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge. 
+                "html_content": f"""<p>Hello {client_name},</p>
+
+<p>We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge.</p>
+
+<p>service@altruisadvisor.com / 833.227.8500</p>
+
+<p>Kind Regards,<br>
+Alex<br>
+{self._get_email_signature()}</p>""",
+                "text_content": f"""Hello {client_name},
+
+We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge.
+
 service@altruisadvisor.com / 833.227.8500
+
 Kind Regards, 
 Alex
 {self._get_email_signature()}"""
@@ -333,13 +463,33 @@ Alex
         elif stage == "follow_up_email":
             return {
                 "subject": "We tried to reach you - Altruis Advisor Group",
-                "body": f"""Hello {client_name}, 
-Alex here from Altruis Advisor Group (on behalf of our CEO Anthony Fracchia), I just tried contacting you by phone. We've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? As a friendly reminder, our services are provided free of charge 😊.
-Reply "Yes" and one of our insurance experts will reach out to schedule a discovery call to get reacquainted with your specific situation.
-Reply "No" and our team will not contact you unless you reach out in the future.
-Reply "Remove" and we will remove you from all future correspondence
+                "html_content": f"""<p>Hello {client_name},</p>
 
-We look forward to hearing back from you
+<p>Alex here from Altruis Advisor Group (on behalf of our CEO Anthony Fracchia), I just tried contacting you by phone. We've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? As a friendly reminder, our services are provided free of charge 😊.</p>
+
+<p><strong>Reply Options:</strong></p>
+<ul>
+<li>Reply "Yes" and one of our insurance experts will reach out to schedule a discovery call to get reacquainted with your specific situation.</li>
+<li>Reply "No" and our team will not contact you unless you reach out in the future.</li>
+<li>Reply "Remove" and we will remove you from all future correspondence</li>
+</ul>
+
+<p>We look forward to hearing back from you!</p>
+
+<p>Have a wonderful day!<br>
+Alex<br>
+{self._get_email_signature()}</p>""",
+                "text_content": f"""Hello {client_name}, 
+
+Alex here from Altruis Advisor Group (on behalf of our CEO Anthony Fracchia), I just tried contacting you by phone. We've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? As a friendly reminder, our services are provided free of charge 😊.
+
+Reply Options:
+• Reply "Yes" and one of our insurance experts will reach out to schedule a discovery call to get reacquainted with your specific situation.
+• Reply "No" and our team will not contact you unless you reach out in the future.
+• Reply "Remove" and we will remove you from all future correspondence
+
+We look forward to hearing back from you!
+
 Have a wonderful day!
 Alex
 {self._get_email_signature()}"""

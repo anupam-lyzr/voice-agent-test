@@ -1,7 +1,7 @@
 {
-  "last_updated": "2025-08-14T10:33:14.594182",
+  "last_updated": "2025-08-20T11:23:11.919036",
   "segments": {
-    "count": 32,
+    "count": 34,
     "files": [
       "agent_intro_middle",
       "agent_intro_start",
@@ -15,6 +15,7 @@
       "dnc_confirmation",
       "error",
       "goodbye",
+      "hello",
       "identity_clarification",
       "keep_communications",
       "medicare_greeting_middle",
@@ -34,7 +35,8 @@
       "not_interested_start",
       "repeat_response",
       "schedule_middle",
-      "schedule_start"
+      "schedule_start",
+      "voicemail_start"
     ]
   },
   "client_names": {
