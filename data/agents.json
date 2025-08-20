@@ -7,7 +7,10 @@
       "google_calendar_id": "anthony@altruisadvisor.com",
       "timezone": "America/New_York",
       "working_hours": "9AM-5PM",
-      "specialties": ["health", "medicare"],
+      "specialties": [
+        "health",
+        "medicare"
+      ],
       "tag_identifier": "AB - Anthony Fracchia",
       "client_count": 1861
     },
@@ -18,7 +21,10 @@
       "google_calendar_id": "lashawn@altruisadvisor.com",
       "timezone": "America/New_York",
       "working_hours": "9AM-5PM",
-      "specialties": ["auto", "life"],
+      "specialties": [
+        "auto",
+        "life"
+      ],
       "tag_identifier": "AB - LaShawn Boyd",
       "client_count": 822
     },
@@ -29,7 +35,10 @@
       "google_calendar_id": "india@altruisadvisor.com",
       "timezone": "America/New_York",
       "working_hours": "9AM-5PM",
-      "specialties": ["health", "dental"],
+      "specialties": [
+        "health",
+        "dental"
+      ],
       "tag_identifier": "AB - India Watson",
       "client_count": 770
     },
@@ -40,7 +49,10 @@
       "google_calendar_id": "hineth@altruisadvisor.com",
       "timezone": "America/New_York",
       "working_hours": "9AM-5PM",
-      "specialties": ["medicare", "supplements"],
+      "specialties": [
+        "medicare",
+        "supplements"
+      ],
       "tag_identifier": "AB - Hineth Pettway",
       "client_count": 649
     },
@@ -51,7 +63,10 @@
       "google_calendar_id": "keith@altruisadvisor.com",
       "timezone": "America/New_York",
       "working_hours": "9AM-5PM",
-      "specialties": ["vision", "dental"],
+      "specialties": [
+        "vision",
+        "dental"
+      ],
       "tag_identifier": "AB - Keith Braswell",
       "client_count": 907
     }

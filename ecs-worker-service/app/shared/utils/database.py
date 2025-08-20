@@ -34,11 +34,13 @@ class DatabaseClient:
             logger.info(f"Environment: {settings.environment}")
 
             client_options = {
-                'serverSelectionTimeoutMS': 5000,
-                'connectTimeoutMS': 10000,
-                'socketTimeoutMS': 10000,
+                'serverSelectionTimeoutMS': 10000,  # Increased from 5000
+                'connectTimeoutMS': 15000,  # Increased from 10000
+                'socketTimeoutMS': 15000,  # Increased from 10000
                 'maxPoolSize': 100,
                 'minPoolSize': 5,
+                'retryWrites': False,  # Disable retry writes for DocumentDB
+                'retryReads': False,   # Disable retry reads for DocumentDB
             }
 
             if settings.is_production():
@@ -49,6 +51,11 @@ class DatabaseClient:
             else:
                 logger.info("Using non-TLS local development settings with authSource=admin.")
 
+            # Close existing connection if any
+            if self.client:
+                self.client.close()
+                self._connected = False
+
             self.client = AsyncIOMotorClient(
                 settings.mongodb_uri,
                 **client_options
@@ -56,7 +63,25 @@ class DatabaseClient:
 
             self.database = self.client[settings.documentdb_database]
 
-            await self.client.admin.command('ping')
+            # Test connection with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    await asyncio.wait_for(self.client.admin.command('ping'), timeout=10.0)
+                    break
+                except asyncio.TimeoutError:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ Database connection attempt {attempt + 1} timed out, retrying...")
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        raise ConnectionFailure("Database connection timed out after multiple attempts")
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ Database connection attempt {attempt + 1} failed: {e}, retrying...")
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    else:
+                        raise
+
             await self._create_indexes()
 
             self._connected = True
@@ -64,6 +89,7 @@ class DatabaseClient:
 
         except Exception as e:
             logger.error(f"❌ Database connection failed: {e}")
+            self._connected = False
             raise ConnectionFailure(f"Failed to connect to database: {e}")
     
     async def disconnect(self):
@@ -104,6 +130,27 @@ class DatabaseClient:
     def is_connected(self) -> bool:
         """Check if database is connected"""
         return self._connected
+    
+    async def ensure_connected(self) -> bool:
+        """Ensure database is connected, attempt reconnection if needed"""
+        if self._connected and self.client:
+            try:
+                # Quick ping to verify connection is still alive
+                await asyncio.wait_for(self.client.admin.command('ping'), timeout=5.0)
+                return True
+            except Exception:
+                logger.warning("⚠️ Database connection lost, attempting to reconnect...")
+                self._connected = False
+        
+        if not self._connected:
+            try:
+                await self.connect()
+                return True
+            except Exception as e:
+                logger.error(f"❌ Failed to reconnect to database: {e}")
+                return False
+        
+        return False
     
     @property
     def clients(self) -> AsyncIOMotorCollection:

@@ -435,8 +435,9 @@ async def health_check():
     # Check database (non-blocking)
     try:
         if db_client is not None:
-            admin_db = await db_client.admin()
-            if admin_db:
+            # Use the is_connected method instead of boolean evaluation
+            if db_client.is_connected():
+                admin_db = db_client.client.admin
                 await asyncio.wait_for(admin_db.command('ping'), timeout=5.0)
                 health_status["services"]["database"] = "healthy"
             else:

@@ -57,9 +57,10 @@ class Settings(BaseSettings):
     capsule_api_url: str = Field(default="https://api.capsulecrm.com", env="CAPSULE_API_URL")
     
     # Google Calendar Integration
-    google_calendar_client_id: str = Field(default="", env="GOOGLE_CALENDAR_CLIENT_ID")
-    google_calendar_client_secret: str = Field(default="", env="GOOGLE_CALENDAR_CLIENT_SECRET")
-    google_service_account_file: str = Field(default="", env="GOOGLE_SERVICE_ACCOUNT_FILE")
+    google_service_account_email: Optional[str] = Field(default=None, env="GOOGLE_SERVICE_ACCOUNT_EMAIL")
+    google_service_account_private_key: Optional[str] = Field(default=None, env="GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY") 
+    google_service_account_project_id: Optional[str] = Field(default=None, env="GOOGLE_SERVICE_ACCOUNT_PROJECT_ID")
+    google_calendar_primary_id: Optional[str] = Field(default=None, env="GOOGLE_CALENDAR_PRIMARY_ID")
 
     
     # Email Configuration (SES/SMTP)

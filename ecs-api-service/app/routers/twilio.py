@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import Response
 import uuid
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import logging
 import asyncio
 from datetime import datetime
@@ -1149,16 +1149,8 @@ async def status_webhook(
                 
                 # Determine final outcome based on conversation
                 if hasattr(session, 'conversation_turns') and session.conversation_turns:
-                    last_turn = session.conversation_turns[-1]
-                    # Simple outcome detection - can be enhanced
-                    if "interested" in last_turn.agent_response.lower():
-                        session.final_outcome = "interested"
-                    elif "not interested" in last_turn.agent_response.lower():
-                        session.final_outcome = "not_interested"
-                    elif "remove" in last_turn.agent_response.lower():
-                        session.final_outcome = "dnc_requested"
-                    else:
-                        session.final_outcome = "completed"
+                    # Analyze the entire conversation to determine outcome
+                    session.final_outcome = _analyze_conversation_outcome(session.conversation_turns)
                 else:
                     session.final_outcome = CallStatus
                 
@@ -1194,6 +1186,70 @@ async def status_webhook(
     except Exception as e:
         logger.error(f"❌ Status webhook error: {e}")
         return {"status": "error", "message": str(e), "call_sid": CallSid}
+
+def _analyze_conversation_outcome(conversation_turns: List[ConversationTurn]) -> str:
+        """Analyze conversation turns to determine the final outcome based on AAG script"""
+        if not conversation_turns:
+            return "completed"
+        
+        # Look for specific keywords in customer speech across all turns
+        customer_speech_combined = " ".join([
+            turn.customer_speech.lower() for turn in conversation_turns 
+            if turn.customer_speech
+        ])
+        
+        # Check for DNC-related keywords (highest priority)
+        dnc_keywords = [
+            "remove", "delete", "don't call", "stop calling", "take me off",
+            "unsubscribe", "never call", "no more calls", "do not contact"
+        ]
+        
+        # Check for scheduling-related keywords
+        scheduling_keywords = [
+            "schedule", "appointment", "meeting", "tomorrow", "next week", 
+            "available", "time", "when", "book", "reserve", "calendar", "yes"
+        ]
+        
+        # Check for interest-related keywords (first "Yes")
+        interested_keywords = [
+            "interested", "yes", "sure", "okay", "alright", "good", "great",
+            "definitely", "absolutely", "love to", "would like", "want to"
+        ]
+        
+        # Check for disinterest-related keywords (first "No")
+        not_interested_keywords = [
+            "not interested", "no thanks", "no thank you", "not right now",
+            "maybe later", "call back", "busy", "not now", "don't want", "no"
+        ]
+        
+        # Check for voicemail indicators
+        voicemail_indicators = [
+            "voicemail", "leave a message", "beep", "recording", "after the tone"
+        ]
+        
+        # Analyze the conversation based on AAG script flow
+        if any(keyword in customer_speech_combined for keyword in dnc_keywords):
+            return "dnc_requested"
+        elif any(keyword in customer_speech_combined for keyword in voicemail_indicators):
+            return "voicemail"
+        elif any(keyword in customer_speech_combined for keyword in scheduling_keywords):
+            # Check if it's morning or afternoon preference
+            if any(word in customer_speech_combined for word in ["morning", "am", "9", "10", "11"]):
+                return "send_email_invite"  # Will send calendar invite
+            elif any(word in customer_speech_combined for word in ["afternoon", "pm", "2", "3", "4"]):
+                return "send_email_invite"  # Will send calendar invite
+            else:
+                return "send_email_invite"  # Will send calendar invite
+        elif any(keyword in customer_speech_combined for keyword in interested_keywords):
+            return "interested"  # First "Yes" - agent will reach out
+        elif any(keyword in customer_speech_combined for keyword in not_interested_keywords):
+            return "not_interested"
+        else:
+            # If no specific outcome detected, check conversation length
+            if len(conversation_turns) < 3:
+                return "no_contact"  # Short conversation might indicate no answer
+            else:
+                return "completed"  # Default fallback
 
 @router.get("/test-connection")
 async def test_connection():

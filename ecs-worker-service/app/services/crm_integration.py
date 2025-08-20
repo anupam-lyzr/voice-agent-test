@@ -7,7 +7,7 @@ import asyncio
 import httpx
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import base64
 from shared.config.settings import settings
 from shared.models.client import Client, CRMTag, CallOutcome
@@ -21,6 +21,14 @@ class CRMIntegration:
     def __init__(self):
         self.api_url = settings.capsule_api_url or "https://api.capsulecrm.com"
         self.api_token = settings.capsule_api_token
+        
+        # Initialize database client
+        try:
+            from shared.utils.database import get_database
+            self.db_client = get_database()
+        except Exception as e:
+            logger.warning(f"⚠️ Could not initialize database client: {e}")
+            self.db_client = None
         
         # HTTP client for API calls
         self.httpx_client = httpx.AsyncClient(
@@ -46,50 +54,93 @@ class CRMIntegration:
         if not self.api_token:
             logger.warning("⚠️ Capsule CRM API token not configured - CRM operations will be mocked")
     
-    async def update_client_record(self, client: Client) -> Dict[str, Any]:
-        """Update client record in Capsule CRM"""
+    def _map_outcome_to_crm_tag(self, outcome: str) -> str:
+        """Map call outcome to CRM tag"""
+        tag_mapping = {
+            "interested": "LYZR-UC1-INTERESTED",
+            "interested_no_schedule": "LYZR-UC1-INTERESTED",
+            "send_email_invite": "LYZR-UC1-INTERESTED", 
+            "scheduled": "LYZR-UC1-INTERESTED",
+            "not_interested": "LYZR-UC1-NOT-INTERESTED",
+            "dnc_requested": "LYZR-UC1-DNC-REQUESTED",
+            "no_contact": "LYZR-UC1-NO-CONTACT",
+            "voicemail": "LYZR-UC1-NO-CONTACT",
+            "invalid_number": "LYZR-UC1-INVALID-NUMBER",
+            "invalid_email": "LYZR-UC1-INVALID-EMAIL"
+        }
         
+        return tag_mapping.get(outcome, "LYZR-UC1-NO-CONTACT")
+    
+    async def update_client_record(self, client_data: Dict[str, Any], call_outcome: str, call_summary: Optional[str] = None) -> bool:
+        """Update client record in CRM with call outcome and summary"""
         try:
-            if not self.api_token:
-                return await self._mock_crm_update(client)
+            logger.info(f"🏷️ Updating CRM for client {client_data.get('client_id', 'unknown')} with outcome: {call_outcome}")
             
-            # Find person in CRM by phone or email
-            person_id = await self._find_person(client)
+            # Map outcome to CRM tag
+            crm_tag = self._map_outcome_to_crm_tag(call_outcome)
             
-            if not person_id:
-                logger.warning(f"⚠️ Person not found in CRM: {client.client.full_name}")
-                return {
-                    "success": False,
-                    "error": "person_not_found",
-                    "client_id": client.id
-                }
-            
-            # Update tags based on call outcome
-            tag_result = await self._update_person_tags(person_id, client)
-            
-            # Add call notes
-            notes_result = await self._add_call_notes(person_id, client)
-            
-            # Mark client as CRM updated
-            await client_repo.mark_crm_updated(client.id)
-            
-            logger.info(f"✅ CRM updated for {client.client.full_name}")
-            
-            return {
-                "success": True,
-                "person_id": person_id,
-                "tags_updated": tag_result["success"],
-                "notes_added": notes_result["success"],
-                "client_id": client.id
+            # Prepare update data
+            update_data = {
+                "tags": crm_tag,
+                "last_contact_date": datetime.utcnow().isoformat(),
+                "last_contact_method": "voice_call",
+                "call_outcome": call_outcome
             }
+            
+            # Add call summary if provided
+            if call_summary:
+                update_data["call_summary"] = call_summary
+            
+            # Update based on call outcome
+            if call_outcome in ["interested", "interested_no_schedule", "send_email_invite", "scheduled"]:
+                update_data["status"] = "interested"
+                update_data["needs_follow_up"] = True
+                update_data["follow_up_date"] = (datetime.utcnow() + timedelta(days=1)).isoformat()
+            
+            elif call_outcome == "not_interested":
+                update_data["status"] = "not_interested"
+                update_data["needs_follow_up"] = False
+            
+            elif call_outcome == "dnc_requested":
+                update_data["status"] = "do_not_contact"
+                update_data["needs_follow_up"] = False
+                update_data["dnc_date"] = datetime.utcnow().isoformat()
+            
+            elif call_outcome in ["no_contact", "voicemail"]:
+                update_data["status"] = "no_contact"
+                update_data["contact_attempts"] = update_data.get("contact_attempts", 0) + 1
+                
+                # Check if we should mark as no-contact after 5-7 attempts
+                attempts = update_data["contact_attempts"]
+                if attempts >= 7:
+                    update_data["tags"] = "LYZR-UC1-NO-CONTACT"
+                    update_data["status"] = "no_contact_max_attempts"
+                    update_data["needs_follow_up"] = False
+                else:
+                    update_data["needs_follow_up"] = True
+                    update_data["follow_up_date"] = (datetime.utcnow() + timedelta(days=2)).isoformat()
+            
+            # Update in database
+            if self.db_client and hasattr(self.db_client, 'is_connected') and self.db_client.is_connected():
+                client_id = client_data.get("client_id")
+                if client_id:
+                    await self.db_client.database.clients.update_one(
+                        {"client_id": client_id},
+                        {"$set": update_data}
+                    )
+                    logger.info(f"✅ CRM updated for client {client_id} with tag: {crm_tag}")
+                    return True
+            
+            # Log the update (for mock mode)
+            logger.info(f"📝 CRM Update - Client: {client_data.get('client_id', 'unknown')}")
+            logger.info(f"📝 CRM Update - Tag: {crm_tag}")
+            logger.info(f"📝 CRM Update - Status: {update_data.get('status', 'unknown')}")
+            
+            return True
             
         except Exception as e:
-            logger.error(f"❌ CRM update error for {client.client.full_name}: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "client_id": client.id
-            }
+            logger.error(f"❌ Error updating CRM record: {e}")
+            return False
     
     async def _find_person(self, client: Client) -> Optional[int]:
         """Find person in Capsule CRM by phone or email"""

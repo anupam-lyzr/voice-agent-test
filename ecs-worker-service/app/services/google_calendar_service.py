@@ -1,475 +1,399 @@
 """
-Google Calendar Service Account Integration
-Handles agent calendar scheduling using service account authentication
+Corrected Google Calendar Integration Service
 """
 
-import asyncio
 import json
 import logging
-from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
-from pathlib import Path
+from typing import Dict, Any, List, Optional
+import pytz
 
-import httpx
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    GOOGLE_CALENDAR_AVAILABLE = True
+except ImportError:
+    GOOGLE_CALENDAR_AVAILABLE = False
 
 from shared.config.settings import settings
+from shared.utils.database import get_database
 
 logger = logging.getLogger(__name__)
 
 class GoogleCalendarService:
-    """Service for Google Calendar integration using service account"""
+    """Corrected Google Calendar service for agent scheduling"""
     
     def __init__(self):
         self.service = None
-        self.credentials = None
-        self.agents_config = self._load_agents_config()
-        
-        # Statistics
-        self.events_created = 0
-        self.events_failed = 0
+        self.db_client = None
+        self._configured = False
+        self._configure()
     
-    def _load_agents_config(self) -> Dict[str, Any]:
-        """Load agents configuration"""
+    def _configure(self):
+        """Configure Google Calendar service with proper error handling"""
         try:
-            with open("data/agents.json", 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to load agents config: {e}")
-            return {"agents": []}
-    
-    async def initialize(self) -> bool:
-        """Initialize Google Calendar service with service account credentials"""
-        try:
-            # Check if service account credentials file exists
-            credentials_path = Path("config/google-service-account.json")
+            if not GOOGLE_CALENDAR_AVAILABLE:
+                logger.warning("⚠️ Google Calendar libraries not installed")
+                return
             
-            if not credentials_path.exists():
-                logger.warning("Google Calendar service account credentials not found")
-                logger.info("To enable Google Calendar integration:")
-                logger.info("1. Create a service account in Google Cloud Console")
-                logger.info("2. Download the JSON credentials file")
-                logger.info("3. Save it as config/google-service-account.json")
-                logger.info("4. Share calendars with the service account email")
-                return False
+            # Validate required credentials
+            if not all([
+                settings.google_service_account_email,
+                settings.google_service_account_private_key,
+                settings.google_service_account_project_id
+            ]):
+                logger.warning("⚠️ Google Calendar credentials incomplete")
+                logger.info("Required: GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY, GOOGLE_SERVICE_ACCOUNT_PROJECT_ID")
+                return
             
-            # Load service account credentials
-            self.credentials = Credentials.from_service_account_file(
-                credentials_path,
+            # Build service account credentials
+            credentials_info = {
+                "type": "service_account",
+                "project_id": settings.google_service_account_project_id,
+                "private_key_id": "",  # Not required for authentication
+                "private_key": settings.google_service_account_private_key.replace('\\n', '\n'),
+                "client_email": settings.google_service_account_email,
+                "client_id": "",  # Not required for authentication
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs"
+            }
+            
+            # Create credentials
+            credentials = service_account.Credentials.from_service_account_info(
+                credentials_info,
                 scopes=['https://www.googleapis.com/auth/calendar']
             )
             
-            # Build the service
-            self.service = build('calendar', 'v3', credentials=self.credentials)
+            # Build service
+            self.service = build('calendar', 'v3', credentials=credentials)
+            self._configured = True
             
-            logger.info("✅ Google Calendar service initialized successfully")
-            return True
+            logger.info("✅ Google Calendar service configured successfully")
             
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Google Calendar service: {e}")
-            return False
+            logger.error(f"❌ Google Calendar configuration failed: {e}")
+            self._configured = False
     
     def is_configured(self) -> bool:
-        """Check if Google Calendar is properly configured"""
-        return self.service is not None
+        """Check if service is properly configured"""
+        return self._configured and self.service is not None
     
-    async def get_agent_availability(self, agent_email: str, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
-        """Get agent's calendar availability for the specified time range"""
-        if not self.is_configured():
-            return []
-        
+    async def get_agent_by_name(self, agent_name: str) -> Optional[Dict]:
+        """Get agent configuration by name from database or fallback to file"""
         try:
-            # Get busy times from calendar
-            body = {
-                "timeMin": start_time.isoformat() + 'Z',
-                "timeMax": end_time.isoformat() + 'Z',
-                "items": [{"id": agent_email}]
-            }
+            # First try to get from database
+            if not self.db_client:
+                self.db_client = get_database()
             
-            freebusy_result = self.service.freebusy().query(body=body).execute()
+            if await self.db_client.ensure_connected():
+                # Check if we're in testing mode
+                from shared.config.settings import settings
+                testing_mode = getattr(settings, 'testing_mode', False)
+                
+                if testing_mode:
+                    # In testing mode, look for test agents first
+                    logger.info(f"🧪 Testing mode: Looking for test agent '{agent_name}'")
+                    test_agents_collection = self.db_client.database.test_agents
+                    test_agent = await test_agents_collection.find_one({"name": agent_name})
+                    if test_agent:
+                        logger.info(f"✅ Found test agent '{agent_name}' in database")
+                        return {
+                            "name": test_agent.get("name"),
+                            "email": test_agent.get("email"),
+                            "phone": test_agent.get("phone", ""),
+                            "calendar_id": test_agent.get("google_calendar_id", test_agent.get("email")),
+                            "timezone": test_agent.get("timezone", "America/New_York")
+                        }
+                
+                # In production mode or if test agent not found, look for production agents
+                logger.info(f"🔍 Looking for production agent '{agent_name}' in database")
+                agents_collection = self.db_client.database.agents
+                agent = await agents_collection.find_one({"name": agent_name})
+                if agent:
+                    logger.info(f"✅ Found production agent '{agent_name}' in database")
+                    return {
+                        "name": agent.get("name"),
+                        "email": agent.get("email"),
+                        "phone": agent.get("phone", ""),
+                        "calendar_id": agent.get("google_calendar_id", agent.get("email")),
+                        "timezone": agent.get("timezone", "America/New_York")
+                    }
             
-            busy_times = []
-            calendar_data = freebusy_result.get('calendars', {}).get(agent_email, {})
+            # Fallback to file-based config for testing
+            logger.info(f"🔍 Agent '{agent_name}' not found in database, checking file config")
+            return self._get_agent_from_file(agent_name)
             
-            for busy_period in calendar_data.get('busy', []):
-                busy_times.append({
-                    'start': datetime.fromisoformat(busy_period['start'].replace('Z', '+00:00')),
-                    'end': datetime.fromisoformat(busy_period['end'].replace('Z', '+00:00'))
-                })
-            
-            return busy_times
-            
-        except HttpError as e:
-            logger.error(f"Google Calendar API error for {agent_email}: {e}")
-            return []
         except Exception as e:
-            logger.error(f"Failed to get availability for {agent_email}: {e}")
-            return []
+            logger.error(f"❌ Error getting agent '{agent_name}': {e}")
+            # Fallback to file-based config
+            return self._get_agent_from_file(agent_name)
     
-    async def find_next_available_slot(self, agent_email: str, duration_minutes: int = 15) -> Optional[datetime]:
-        """Find the next available time slot for an agent"""
-        if not self.is_configured():
-            logger.warning("Google Calendar not configured, using fallback scheduling")
-            return self._fallback_scheduling()
-        
+    def _get_agent_from_file(self, agent_name: str) -> Optional[Dict]:
+        """Get agent configuration from file (for testing)"""
         try:
-            # Search for next 7 days
-            start_search = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+            with open('data/agents.json', 'r') as f:
+                agents_config = json.load(f)
             
-            # Ensure it's a business day
-            while start_search.weekday() >= 5:  # Skip weekends
-                start_search += timedelta(days=1)
+            for agent in agents_config.get("agents", []):
+                if agent.get("name") == agent_name:
+                    logger.info(f"✅ Found agent '{agent_name}' in file config")
+                    return {
+                        "name": agent.get("name"),
+                        "email": agent.get("email"),
+                        "phone": agent.get("phone"),
+                        "calendar_id": agent.get("calendar_id", agent.get("email")),
+                        "timezone": agent.get("timezone", "America/New_York")
+                    }
             
-            for day_offset in range(7):  # Search next 7 days
-                current_day = start_search + timedelta(days=day_offset)
-                
-                # Skip weekends
-                if current_day.weekday() >= 5:
-                    continue
-                
-                # Check availability for business hours (9 AM - 5 PM)
-                day_start = current_day.replace(hour=9, minute=0)
-                day_end = current_day.replace(hour=17, minute=0)
-                
-                busy_times = await self.get_agent_availability(agent_email, day_start, day_end)
-                
-                # Find free slots
-                available_slot = self._find_free_slot(day_start, day_end, busy_times, duration_minutes)
-                if available_slot:
-                    return available_slot
-            
-            logger.warning(f"No available slots found for {agent_email} in next 7 days")
+            logger.warning(f"⚠️ Agent '{agent_name}' not found in file config")
             return None
             
         except Exception as e:
-            logger.error(f"Failed to find available slot for {agent_email}: {e}")
-            return self._fallback_scheduling()
+            logger.error(f"❌ Error loading agents from file: {e}")
+            return None
     
-    def _find_free_slot(self, day_start: datetime, day_end: datetime, busy_times: List[Dict], duration_minutes: int) -> Optional[datetime]:
-        """Find a free slot within a day"""
-        # Create 15-minute time slots
-        slot_duration = timedelta(minutes=15)
-        current_time = day_start
-        
-        while current_time + timedelta(minutes=duration_minutes) <= day_end:
-            slot_end = current_time + timedelta(minutes=duration_minutes)
-            
-            # Check if this slot conflicts with any busy time
-            is_free = True
-            for busy in busy_times:
-                if (current_time < busy['end'] and slot_end > busy['start']):
-                    is_free = False
-                    break
-            
-            if is_free:
-                return current_time
-            
-            current_time += slot_duration
-        
-        return None
-    
-    def _fallback_scheduling(self) -> datetime:
-        """Fallback scheduling when Google Calendar is not available"""
-        # Schedule for next business day at 10 AM
-        next_day = datetime.now() + timedelta(days=1)
-        
-        # Ensure it's a business day
-        while next_day.weekday() >= 5:
-            next_day += timedelta(days=1)
-        
-        return next_day.replace(hour=10, minute=0, second=0, microsecond=0)
-    
-    async def create_meeting(self, agent_email: str, client_name: str, client_email: str, meeting_time: datetime, summary: Optional[str] = None) -> Dict[str, Any]:
-        """Create a calendar event for agent and client"""
-        if not self.is_configured():
-            logger.warning("Google Calendar not configured, logging meeting details only")
-            return {
-                "success": False,
-                "method": "fallback",
-                "meeting_time": meeting_time.isoformat(),
-                "agent_email": agent_email,
-                "client_email": client_email
-            }
-        
+    async def get_test_agent(self) -> Optional[Dict]:
+        """Get a test agent for development/testing"""
         try:
-            # Create event details
+            # First try to get from database
+            if not self.db_client:
+                self.db_client = get_database()
+            
+            if await self.db_client.ensure_connected():
+                # Look for test agents in database
+                test_agents_collection = self.db_client.database.test_agents
+                test_agent = await test_agents_collection.find_one()
+                if test_agent:
+                    logger.info(f"✅ Found test agent '{test_agent.get('name')}' in database")
+                    return {
+                        "name": test_agent.get("name"),
+                        "email": test_agent.get("email"),
+                        "phone": test_agent.get("phone", ""),
+                        "calendar_id": test_agent.get("google_calendar_id", test_agent.get("email")),
+                        "timezone": test_agent.get("timezone", "America/New_York")
+                    }
+            
+            # Try to get from file as fallback
+            test_agent = self._get_agent_from_file("Test Agent")
+            if test_agent:
+                return test_agent
+            
+            # Fallback to default test agent
+            logger.info("🔧 Using default test agent configuration")
+            return {
+                "name": "Test Agent",
+                "email": "test.agent@altruisadvisor.com",
+                "phone": "+1234567890",
+                "calendar_id": "test.agent@altruisadvisor.com",
+                "timezone": "America/New_York"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting test agent: {e}")
+            return None
+    
+    async def test_calendar_access(self) -> Dict[str, Any]:
+        """Test calendar access and return status"""
+        try:
+            if not self.is_configured():
+                return {"success": False, "error": "Service not configured"}
+            
+            # Test by listing calendars
+            calendar_list = self.service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
+            
+            return {
+                "success": True,
+                "calendar_count": len(calendars),
+                "calendars": [{"id": cal["id"], "summary": cal.get("summary", "No title")} for cal in calendars[:5]]
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Calendar access test failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_agent_available_slots(self, agent_email: str, days_ahead: int = 7) -> List[Dict[str, Any]]:
+        """Get available time slots for an agent"""
+        try:
+            if not self.is_configured():
+                logger.warning("⚠️ Google Calendar not configured")
+                return []
+            
+            # Set timezone
+            timezone = pytz.timezone('America/New_York')
+            now = datetime.now(timezone)
+            end_time = now + timedelta(days=days_ahead)
+            
+            # Convert to UTC for API
+            time_min = now.astimezone(pytz.UTC).isoformat()
+            time_max = end_time.astimezone(pytz.UTC).isoformat()
+            
+            # Query for busy times
+            freebusy_request = {
+                'timeMin': time_min,
+                'timeMax': time_max,
+                'items': [{'id': agent_email}]
+            }
+            
+            freebusy_result = self.service.freebusy().query(body=freebusy_request).execute()
+            
+            # Check if agent calendar exists
+            calendar_info = freebusy_result['calendars'].get(agent_email, {})
+            if 'errors' in calendar_info:
+                logger.warning(f"⚠️ Cannot access calendar for {agent_email}")
+                return []
+            
+            busy_periods = calendar_info.get('busy', [])
+            
+            # Generate available slots
+            available_slots = []
+            current_time = now.replace(minute=0, second=0, microsecond=0)
+            
+            # Start from next business hour
+            if current_time.hour < 9:
+                current_time = current_time.replace(hour=9)
+            elif current_time.hour >= 17:
+                current_time = (current_time + timedelta(days=1)).replace(hour=9, minute=0)
+            
+            while current_time < end_time and len(available_slots) < 20:
+                # Skip weekends
+                if current_time.weekday() >= 5:
+                    current_time = (current_time + timedelta(days=1)).replace(hour=9, minute=0)
+                    continue
+                
+                # Skip outside business hours
+                if current_time.hour < 9 or current_time.hour >= 17:
+                    if current_time.hour >= 17:
+                        current_time = (current_time + timedelta(days=1)).replace(hour=9, minute=0)
+                    else:
+                        current_time = current_time.replace(hour=9, minute=0)
+                    continue
+                
+                slot_start = current_time
+                slot_end = slot_start + timedelta(minutes=15)
+                
+                # Check if slot conflicts with busy times
+                is_available = True
+                for busy in busy_periods:
+                    busy_start = datetime.fromisoformat(busy['start'].replace('Z', '+00:00'))
+                    busy_end = datetime.fromisoformat(busy['end'].replace('Z', '+00:00'))
+                    
+                    if slot_start.astimezone(pytz.UTC) < busy_end and slot_end.astimezone(pytz.UTC) > busy_start:
+                        is_available = False
+                        break
+                
+                if is_available:
+                    # Create calendar link for this slot
+                    calendar_link = self._create_calendar_link(
+                        start_time=slot_start,
+                        end_time=slot_end,
+                        agent_email=agent_email
+                    )
+                    
+                    available_slots.append({
+                        'start_time': slot_start.isoformat(),
+                        'end_time': slot_end.isoformat(),
+                        'display_time': slot_start.strftime('%A, %B %d at %I:%M %p'),
+                        'agent_email': agent_email,
+                        'calendar_link': calendar_link
+                    })
+                
+                current_time += timedelta(minutes=15)
+            
+            logger.info(f"✅ Found {len(available_slots)} available slots for {agent_email}")
+            return available_slots
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting availability for {agent_email}: {e}")
+            return []
+    
+    def _create_calendar_link(self, start_time: datetime, end_time: datetime, agent_email: str) -> str:
+        """Create a Google Calendar link for scheduling"""
+        try:
+            # Format times for URL
+            start_str = start_time.strftime('%Y%m%dT%H%M%S')
+            end_str = end_time.strftime('%Y%m%dT%H%M%S')
+            
+            # Create calendar event URL
+            event_details = {
+                'text': 'Discovery Call - Altruis Advisor Group',
+                'dates': f'{start_str}/{end_str}',
+                'details': '15-minute discovery call to review your health insurance needs and options.',
+                'location': 'Phone Call',
+                'add': agent_email
+            }
+            
+            # Build URL
+            base_url = 'https://calendar.google.com/calendar/render'
+            params = '&'.join([f'{k}={v}' for k, v in event_details.items()])
+            
+            return f"{base_url}?action=TEMPLATE&{params}"
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating calendar link: {e}")
+            return "#"
+    
+    async def schedule_discovery_call(
+        self,
+        client_email: str,
+        agent_email: str,
+        start_time: datetime,
+        client_name: str,
+        agent_name: str
+    ) -> Dict[str, Any]:
+        """Schedule a discovery call (voice call, not Google Meet)"""
+        try:
+            if not self.is_configured():
+                return {"success": False, "error": "Google Calendar not configured"}
+            
+            end_time = start_time + timedelta(minutes=15)
+            
+            # Create event for voice call (no Google Meet)
             event = {
                 'summary': f'Discovery Call - {client_name}',
-                'description': self._create_event_description(client_name, summary),
+                'description': f'15-minute discovery call with {client_name} to review health insurance needs.\n\nAgenda:\n• Review current policy\n• Assess insurance needs\n• Q&A session\n• Schedule follow-up\n\nFormat: Voice Call (Agent will call client)',
                 'start': {
-                    'dateTime': meeting_time.isoformat(),
+                    'dateTime': start_time.isoformat(),
                     'timeZone': 'America/New_York',
                 },
                 'end': {
-                    'dateTime': (meeting_time + timedelta(minutes=15)).isoformat(),
+                    'dateTime': end_time.isoformat(),
                     'timeZone': 'America/New_York',
                 },
                 'attendees': [
-                    {'email': agent_email, 'responseStatus': 'accepted'},
-                    {'email': client_email, 'responseStatus': 'needsAction'}
+                    {'email': client_email, 'displayName': client_name},
+                    {'email': agent_email, 'displayName': agent_name},
                 ],
                 'reminders': {
                     'useDefault': False,
                     'overrides': [
+                        {'method': 'email', 'minutes': 24 * 60},
                         {'method': 'email', 'minutes': 60},
                         {'method': 'popup', 'minutes': 15},
                     ],
-                },
-                'conferenceData': {
-                    'createRequest': {
-                        'requestId': f"discovery-{client_name.replace(' ', '')}-{int(meeting_time.timestamp())}",
-                        'conferenceSolutionKey': {'type': 'hangoutsMeet'}
-                    }
                 }
             }
             
-            # Create the event
-            created_event = self.service.events().insert(
+            # Insert event in agent's calendar
+            event_result = self.service.events().insert(
                 calendarId=agent_email,
                 body=event,
-                conferenceDataVersion=1,
                 sendUpdates='all'
             ).execute()
             
-            self.events_created += 1
-            
-            logger.info(f"✅ Calendar event created: {created_event.get('id')}")
+            logger.info(f"✅ Discovery call scheduled: {event_result['id']}")
             
             return {
                 "success": True,
-                "event_id": created_event.get('id'),
-                "event_link": created_event.get('htmlLink'),
-                "meeting_time": meeting_time.isoformat(),
-                "meet_link": self._extract_meet_link(created_event)
+                "event_id": event_result['id'],
+                "event_link": event_result.get('htmlLink', ''),
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "call_type": "voice_call"
             }
             
-        except HttpError as e:
-            logger.error(f"Google Calendar API error: {e}")
-            self.events_failed += 1
+        except Exception as e:
+            logger.error(f"❌ Error scheduling discovery call: {e}")
             return {"success": False, "error": str(e)}
-        except Exception as e:
-            logger.error(f"Failed to create calendar event: {e}")
-            self.events_failed += 1
-            return {"success": False, "error": str(e)}
-    
-    def _create_event_description(self, client_name: str, summary: Optional[str]) -> str:
-        """Create event description with call summary"""
-        description = f"""Discovery Call with {client_name}
-
-This meeting was automatically scheduled following an interested response during our voice campaign.
-
-"""
-        
-        if summary:
-            description += f"""Call Summary:
-{summary}
-
-"""
-        
-        description += """Meeting Agenda:
-• Review client's insurance needs
-• Discuss available options
-• Answer questions and concerns
-• Next steps and follow-up
-
-Prepared by: Voice Agent Campaign System
-"""
-        
-        return description
-    
-    def _extract_meet_link(self, event: Dict[str, Any]) -> Optional[str]:
-        """Extract Google Meet link from event"""
-        conference_data = event.get('conferenceData', {})
-        entry_points = conference_data.get('entryPoints', [])
-        
-        for entry_point in entry_points:
-            if entry_point.get('entryPointType') == 'video':
-                return entry_point.get('uri')
-        
-        return None
-    
-    async def get_agent_calendar_events(self, agent_email: str, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
-        """Get agent's calendar events for a specific date range"""
-        if not self.is_configured():
-            return []
-        
-        try:
-            events_result = self.service.events().list(
-                calendarId=agent_email,
-                timeMin=start_date.isoformat() + 'Z',
-                timeMax=end_date.isoformat() + 'Z',
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            
-            events = events_result.get('items', [])
-            
-            formatted_events = []
-            for event in events:
-                start = event['start'].get('dateTime', event['start'].get('date'))
-                end = event['end'].get('dateTime', event['end'].get('date'))
-                
-                formatted_events.append({
-                    'id': event['id'],
-                    'summary': event.get('summary', 'No Title'),
-                    'start': start,
-                    'end': end,
-                    'attendees': event.get('attendees', []),
-                    'status': event.get('status', 'confirmed')
-                })
-            
-            return formatted_events
-            
-        except Exception as e:
-            logger.error(f"Failed to get calendar events for {agent_email}: {e}")
-            return []
-    
-    async def update_meeting(self, agent_email: str, event_id: str, updates: Dict[str, Any]) -> bool:
-        """Update an existing calendar event"""
-        if not self.is_configured():
-            return False
-        
-        try:
-            # Get existing event
-            event = self.service.events().get(
-                calendarId=agent_email,
-                eventId=event_id
-            ).execute()
-            
-            # Apply updates
-            for key, value in updates.items():
-                event[key] = value
-            
-            # Update the event
-            updated_event = self.service.events().update(
-                calendarId=agent_email,
-                eventId=event_id,
-                body=event,
-                sendUpdates='all'
-            ).execute()
-            
-            logger.info(f"✅ Calendar event updated: {event_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to update calendar event {event_id}: {e}")
-            return False
-    
-    async def cancel_meeting(self, agent_email: str, event_id: str, reason: str = "Meeting cancelled") -> bool:
-        """Cancel a calendar event"""
-        if not self.is_configured():
-            return False
-        
-        try:
-            # Update event status to cancelled
-            event = self.service.events().get(
-                calendarId=agent_email,
-                eventId=event_id
-            ).execute()
-            
-            event['status'] = 'cancelled'
-            event['description'] = event.get('description', '') + f"\n\nCancellation Reason: {reason}"
-            
-            self.service.events().update(
-                calendarId=agent_email,
-                eventId=event_id,
-                body=event,
-                sendUpdates='all'
-            ).execute()
-            
-            logger.info(f"✅ Calendar event cancelled: {event_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to cancel calendar event {event_id}: {e}")
-            return False
-    
-    def get_agent_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        """Get agent configuration by email"""
-        for agent in self.agents_config.get("agents", []):
-            if agent.get("email") == email:
-                return agent
-        return None
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get calendar service statistics"""
-        return {
-            "configured": self.is_configured(),
-            "events_created": self.events_created,
-            "events_failed": self.events_failed,
-            "success_rate": (self.events_created / max(1, self.events_created + self.events_failed)) * 100,
-            "agents_count": len(self.agents_config.get("agents", []))
-        }
-
-# Global calendar service instance
-calendar_service = GoogleCalendarService()
-
-async def init_calendar_service():
-    """Initialize the calendar service"""
-    return await calendar_service.initialize()
-
-# Utility functions for easy access
-async def schedule_discovery_call(agent_email: str, client_name: str, client_email: str, call_summary: Optional[str] = None) -> Dict[str, Any]:
-    """Schedule a discovery call for an interested client"""
-    try:
-        # Find next available slot
-        meeting_time = await calendar_service.find_next_available_slot(agent_email)
-        
-        if not meeting_time:
-            return {
-                "success": False,
-                "error": "No available time slots found"
-            }
-        
-        # Create the meeting
-        result = await calendar_service.create_meeting(
-            agent_email=agent_email,
-            client_name=client_name,
-            client_email=client_email,
-            meeting_time=meeting_time,
-            summary=call_summary
-        )
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Failed to schedule discovery call: {e}")
-        return {"success": False, "error": str(e)}
-
-async def get_agent_schedule(agent_email: str, days_ahead: int = 7) -> List[Dict[str, Any]]:
-    """Get agent's schedule for the next N days"""
-    start_date = datetime.now()
-    end_date = start_date + timedelta(days=days_ahead)
-    
-    return await calendar_service.get_agent_calendar_events(agent_email, start_date, end_date)
-
-# Setup instructions for Google Calendar integration
-SETUP_INSTRUCTIONS = """
-Google Calendar Service Account Setup:
-
-1. Go to Google Cloud Console (https://console.cloud.google.com/)
-2. Create a new project or select existing project
-3. Enable the Google Calendar API
-4. Create a service account:
-   - Go to IAM & Admin > Service Accounts
-   - Click "Create Service Account"
-   - Enter name: "voice-agent-calendar"
-   - Grant role: "Editor" or custom role with calendar permissions
-5. Create and download JSON key file
-6. Save the file as: config/google-service-account.json
-7. Share each agent's calendar with the service account email
-8. Grant "Make changes to events" permission
-
-Example service account email: 
-voice-agent-calendar@your-project.iam.gserviceaccount.com
-
-Agent Calendar Sharing:
-- Each agent must share their calendar with the service account
-- Permission level: "Make changes to events"
-- This allows the system to read availability and create meetings
-
-Testing:
-- Run: python -c "from services.google_calendar import init_calendar_service; import asyncio; asyncio.run(init_calendar_service())"
-"""

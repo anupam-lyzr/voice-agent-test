@@ -226,12 +226,28 @@ class WorkerService:
                 await init_database()
                 logger.info("✅ Database initialized")
                 
-                # Test database connection
+                # Test database connection with retry logic
                 from shared.utils.database import db_client
-                if db_client and db_client.is_connected():
-                    logger.info("✅ Database connection verified")
-                else:
-                    logger.error("❌ Database connection failed")
+                max_db_retries = 3
+                db_connected = False
+                
+                for attempt in range(max_db_retries):
+                    try:
+                        if db_client and await db_client.ensure_connected():
+                            logger.info("✅ Database connection verified")
+                            db_connected = True
+                            break
+                        else:
+                            logger.warning(f"⚠️ Database connection attempt {attempt + 1} failed")
+                            if attempt < max_db_retries - 1:
+                                await asyncio.sleep(5)  # Wait before retry
+                    except Exception as e:
+                        logger.warning(f"⚠️ Database connection attempt {attempt + 1} failed: {e}")
+                        if attempt < max_db_retries - 1:
+                            await asyncio.sleep(5)  # Wait before retry
+                
+                if not db_connected:
+                    logger.error("❌ Database connection failed after all retries")
                     logger.warning("⚠️ Worker will run in basic mode without database access")
                     
             except Exception as e:
@@ -498,7 +514,12 @@ class WorkerService:
         """Send email notifications based on conversation stages"""
         try:
             # Get completed calls that need email notifications
-            if db_client is None or db_client.database is None:
+            if db_client is None:
+                logger.warning("⚠️ Database client not available for email processing")
+                return
+            
+            # Ensure database connection before processing
+            if not await db_client.ensure_connected():
                 logger.warning("⚠️ Database not available for email processing")
                 return
 
@@ -534,16 +555,35 @@ class WorkerService:
                     email_stage = self._determine_email_stage(session.final_outcome)
                     logger.info(f"📧 Email stage determined: {email_stage} for outcome: {session.final_outcome}")
 
+                    # If no email stage found and outcome is "completed", try to infer from conversation
+                    if not email_stage and session.final_outcome == "completed":
+                        inferred_outcome = self._infer_outcome_from_conversation(session)
+                        if inferred_outcome:
+                            email_stage = self._determine_email_stage(inferred_outcome)
+                            logger.info(f"📧 Inferred outcome: {inferred_outcome} -> email stage: {email_stage}")
+
                     if not email_stage:
                         logger.warning(f"⚠️ No email stage mapping found for outcome: {session.final_outcome}")
                         continue
 
-                    # Get client information
+                    # Get client information from session data first
                     client_email = None
-                    client_name = session.client_data.get("client_name", "Client") if session.client_data else "Client"
-
-                    # Try to get client email from database
-                    if session.client_id and session.client_id != "unknown":
+                    client_name = "Client"
+                    
+                    if session.client_data:
+                        # Try to get email from session client_data first
+                        client_email = session.client_data.get("email")
+                        first_name = session.client_data.get("first_name", "")
+                        last_name = session.client_data.get("last_name", "")
+                        client_name = f"{first_name} {last_name}".strip() or "Client"
+                        
+                        if client_email:
+                            logger.info(f"✅ Client email found in session data: {client_email}")
+                        else:
+                            logger.warning(f"⚠️ No email in session client_data for {client_name}")
+                    
+                    # If no email in session data, try database lookup
+                    if not client_email and session.client_id and session.client_id != "unknown":
                         try:
                             from shared.utils.database import client_repo
                             if client_repo:
@@ -554,7 +594,7 @@ class WorkerService:
                                     if hasattr(client.client, 'email') and client.client.email:
                                         client_email = client.client.email
                                         client_name = f"{client.client.first_name} {client.client.last_name}"
-                                        logger.info(f"✅ Client email found: {client_email}")
+                                        logger.info(f"✅ Client email found in database: {client_email}")
                                     else:
                                         logger.warning(f"⚠️ Client {client.client.full_name} has no email address")
                                 else:
@@ -562,7 +602,7 @@ class WorkerService:
                             else:
                                 logger.warning("⚠️ Client repository not available")
                         except Exception as e:
-                            logger.warning(f"Could not get client email: {e}")
+                            logger.warning(f"Could not get client email from database: {e}")
 
                     # If no email found, skip this notification
                     if not client_email:
@@ -572,13 +612,17 @@ class WorkerService:
                     # Get call summary
                     call_summary = self._build_call_summary(session)
 
-                    # Send email based on stage
-                    success = await self.email_service.send_conversation_stage_email(
-                        client_email=client_email,
-                        client_name=client_name,
-                        stage=email_stage,
-                        call_summary=call_summary
-                    )
+                    # Handle special case for send_email_invite (Google Calendar integration)
+                    if email_stage == "open_slots_email":
+                        success = await self._handle_calendar_invite(session, client_email, client_name, call_summary)
+                    else:
+                        # Send regular email
+                        success = await self.email_service.send_conversation_stage_email(
+                            client_email=client_email,
+                            client_name=client_name,
+                            stage=email_stage,
+                            call_summary=call_summary
+                        )
 
                     if success:
                         # Mark email as sent
@@ -588,6 +632,17 @@ class WorkerService:
                         )
                         processed_count += 1
                         logger.info(f"✅ Email sent for call {session.session_id} to {client_email}")
+
+                        # Update CRM with call outcome
+                        try:
+                            if hasattr(self, 'crm_integration'):
+                                await self.crm_integration.update_client_record(
+                                    client_data=session.client_data,
+                                    call_outcome=session.final_outcome,
+                                    call_summary=call_summary
+                                )
+                        except Exception as crm_error:
+                            logger.warning(f"⚠️ CRM update failed: {crm_error}")
 
                 except Exception as e:
                     logger.error(f"❌ Error processing email for call {doc.get('session_id', 'unknown')}: {e}")
@@ -601,19 +656,163 @@ class WorkerService:
         except Exception as e:
             logger.error(f"❌ Email notification processing error: {e}")
 
+    async def _handle_calendar_invite(self, session: CallSession, client_email: str, client_name: str, call_summary: Dict[str, Any]) -> bool:
+        """Handle calendar invite for send_email_invite outcome"""
+        try:
+            logger.info(f"📅 Processing calendar invite for {client_email}")
+            
+            # Get agent information from session
+            agent_name = session.client_data.get("last_agent", "Test Agent")
+            agent_email = session.client_data.get("agent_email", "")
+            
+            # Initialize Google Calendar service
+            from services.google_calendar_service import GoogleCalendarService
+            calendar_service = GoogleCalendarService()
+            
+            if not calendar_service.is_configured():
+                logger.warning("⚠️ Google Calendar not configured, sending fallback email")
+                # Send fallback email
+                return await self.email_service.send_conversation_stage_email(
+                    client_email=client_email,
+                    client_name=client_name,
+                    stage="agent_will_reach_out",
+                    call_summary=call_summary
+                )
+            
+            # Get agent configuration (database first, then file fallback)
+            agent_config = await calendar_service.get_agent_by_name(agent_name)
+            
+            if not agent_config:
+                logger.warning(f"⚠️ Agent '{agent_name}' not found, using test agent")
+                agent_config = await calendar_service.get_test_agent()
+                
+            if not agent_config:
+                logger.error("❌ No agent configuration available, sending fallback email")
+                return await self.email_service.send_conversation_stage_email(
+                    client_email=client_email,
+                    client_name=client_name,
+                    stage="agent_will_reach_out",
+                    call_summary=call_summary
+                )
+            
+            # Use agent email from config, fallback to session data
+            agent_email = agent_config.get("email") or agent_email
+            logger.info(f"🔍 Using agent: {agent_name} ({agent_email})")
+            
+            # Get available slots
+            available_slots = await calendar_service.get_agent_available_slots(agent_email)
+            
+            if not available_slots:
+                logger.warning("⚠️ No available slots found, sending fallback email")
+                return await self.email_service.send_conversation_stage_email(
+                    client_email=client_email,
+                    client_name=client_name,
+                    stage="agent_will_reach_out",
+                    call_summary=call_summary
+                )
+            
+            # Add available slots and agent info to call summary for email template
+            call_summary["available_slots"] = available_slots
+            call_summary["agent_name"] = agent_name
+            call_summary["agent_email"] = agent_email
+            
+            # Send email with calendar slots using our email service
+            success = await self.email_service.send_conversation_stage_email(
+                client_email=client_email,
+                client_name=client_name,
+                stage="open_slots_email",
+                call_summary=call_summary
+            )
+            
+            if success:
+                logger.info(f"✅ Calendar invite email sent with {len(available_slots)} slots for {agent_name}")
+                return True
+            else:
+                logger.error(f"❌ Calendar invite email failed")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error handling calendar invite: {e}")
+            return False
+
     def _determine_email_stage(self, outcome: str) -> Optional[str]:
         """Determine email stage based on call outcome"""
         stage_mapping = {
-            "interested": "interested",
-            "not_interested": "not_interested",
+            "interested": "agent_will_reach_out",
+            "interested_no_schedule": "interested_no_schedule",
+            "send_email_invite": "open_slots_email",
             "scheduled": "meeting_scheduled",
-            "scheduled_morning": "meeting_scheduled",
-            "scheduled_afternoon": "meeting_scheduled",
-            "follow_up": "follow_up",
-            "no_answer": "follow_up",
-            "busy": "follow_up"
+            "not_interested": "keep_communications",
+            "dnc_requested": "dnc_confirmation",
+            "no_contact": "follow_up_email",
+            "voicemail": "follow_up_email",
+            "failed": "follow_up_email",
+            "timeout": "follow_up_email",
+            "hangup": "follow_up_email",
+            "no-answer": "follow_up_email",
+            "canceled": "follow_up_email",
+            "completed": "follow_up_email"
         }
+        
+        # Log the mapping attempt for debugging
+        logger.info(f"🔍 Email stage mapping: outcome='{outcome}' -> stage='{stage_mapping.get(outcome)}'")
+        
         return stage_mapping.get(outcome)
+
+    def _infer_outcome_from_conversation(self, session: CallSession) -> Optional[str]:
+        """Infer outcome from conversation data when outcome is generic"""
+        if not session.conversation_turns:
+            return None
+        
+        # Look for specific keywords in customer speech across all turns
+        customer_speech_combined = " ".join([
+            turn.customer_speech.lower() for turn in session.conversation_turns 
+            if turn.customer_speech
+        ])
+        
+        # Check for scheduling-related keywords
+        scheduling_keywords = [
+            "schedule", "appointment", "meeting", "tomorrow", "next week", 
+            "available", "time", "when", "book", "reserve", "calendar", "yes"
+        ]
+        
+        # Check for interest-related keywords
+        interested_keywords = [
+            "interested", "yes", "sure", "okay", "alright", "good", "great",
+            "definitely", "absolutely", "love to", "would like", "want to"
+        ]
+        
+        # Check for disinterest-related keywords
+        not_interested_keywords = [
+            "not interested", "no thanks", "no thank you", "not right now",
+            "maybe later", "call back", "busy", "not now", "don't want", "no"
+        ]
+        
+        # Check for DNC-related keywords
+        dnc_keywords = [
+            "remove", "delete", "don't call", "stop calling", "take me off",
+            "unsubscribe", "never call", "no more calls", "do not contact"
+        ]
+        
+        # Analyze the conversation based on AAG script flow
+        if any(keyword in customer_speech_combined for keyword in dnc_keywords):
+            return "dnc_requested"
+        elif any(keyword in customer_speech_combined for keyword in scheduling_keywords):
+            return "send_email_invite"
+        elif any(keyword in customer_speech_combined for keyword in interested_keywords):
+            # Check if there are also "no" keywords indicating they declined scheduling
+            if any(keyword in customer_speech_combined for keyword in not_interested_keywords):
+                return "interested_no_schedule"
+            else:
+                return "interested"
+        elif any(keyword in customer_speech_combined for keyword in not_interested_keywords):
+            return "not_interested"
+        else:
+            # If no specific outcome detected, check conversation length
+            if len(session.conversation_turns) < 3:
+                return "no_contact"
+            else:
+                return None
 
     def _build_call_summary(self, session: CallSession) -> Dict[str, Any]:
         """Build call summary for email"""
@@ -623,7 +822,8 @@ class WorkerService:
             "conversation_turns": len(session.conversation_turns) if session.conversation_turns else 0,
             "key_points": [],
             "customer_concerns": [],
-            "recommended_actions": []
+            "recommended_actions": [],
+            "agent_name": session.client_data.get("last_agent", "your agent") if session.client_data else "your agent"
         }
         
         # Extract key points from conversation

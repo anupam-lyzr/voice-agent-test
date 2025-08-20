@@ -409,7 +409,7 @@ class VoiceProcessor:
     # --- State transition handlers (same as before) ---
     
     async def _handle_initial_interest(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user expresses initial interest"""
+        """Handle when user expresses initial interest - First 'Yes'"""
         logger.info("✅ Customer interested in service - Moving to SCHEDULING stage")
         
         agent_name = session.client_data.get("last_agent", "your previous agent")
@@ -417,10 +417,9 @@ class VoiceProcessor:
         
         return await self._create_response(
             response_text=(
-                f"Wonderful! I see that {agent_name} was the last agent who helped you. "
-                f"I'd love to connect you with them again. We'll send you an email with "
-                f"{agent_name}'s available time slots so you can choose what works "
-                f"best for your schedule. Does that sound good?"
+                f"Great, looks like {agent_name} was the last agent you worked with here at Altruis – "
+                f"would you like to schedule a quick 15-minute discovery call with them to get reacquainted? "
+                f"A simple 'Yes' or 'No' will do!"
             ),
             response_category="agent_introduction",
             conversation_stage=ConversationStage.SCHEDULING,
@@ -431,7 +430,7 @@ class VoiceProcessor:
         )
     
     async def _handle_initial_disinterest(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user is not interested"""
+        """Handle when user is not interested - First 'No'"""
         logger.info("❌ Customer not interested - Moving to DNC_CHECK stage")
         
         session.conversation_stage = ConversationStage.DNC_CHECK
@@ -451,7 +450,7 @@ class VoiceProcessor:
         )
     
     async def _handle_scheduling_confirmation(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user confirms they want to schedule"""
+        """Handle when user confirms they want to schedule - Second 'Yes'"""
         logger.info("✅ Customer confirmed scheduling - Ending call with success")
         
         agent_name = session.client_data.get("last_agent", "your agent")
@@ -466,13 +465,13 @@ class VoiceProcessor:
             response_category="schedule_confirmation",
             conversation_stage=ConversationStage.GOODBYE,
             end_conversation=True,
-            outcome="scheduled",
+            outcome="send_email_invite",
             start_time=start_time,
-            detected_intent="scheduled"
+            detected_intent="send_email_invite"
         )
     
     async def _handle_scheduling_rejection(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user declines scheduling"""
+        """Handle when user declines scheduling - Second 'No'"""
         logger.info("❌ Customer declined scheduling - Ending call")
         
         agent_name = session.client_data.get("last_agent", "your agent")
@@ -480,9 +479,9 @@ class VoiceProcessor:
         
         return await self._create_response(
             response_text=(
-                f"I completely understand. {agent_name} will make a note of our conversation, "
-                f"and we'll be here whenever you're ready to explore your options. "
-                f"Thank you for your time today. Have a wonderful day!"
+                f"No problem, {agent_name} will reach out to you and the two of you can work "
+                f"together to determine the best next steps. We look forward to servicing you, "
+                f"have a wonderful day!"
             ),
             response_category="no_schedule_followup",
             conversation_stage=ConversationStage.GOODBYE,
@@ -513,38 +512,19 @@ class VoiceProcessor:
             detected_intent="dnc_requested"
         )
     
-    async def _handle_keep_communications(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user wants to keep receiving communications"""
-        logger.info("✅ Customer wants to keep communications - Ending call")
-        
-        session.conversation_stage = ConversationStage.GOODBYE
-        
-        return await self._create_response(
-            response_text=(
-                "Great! We'll keep you in the loop with helpful health insurance updates "
-                "throughout the year. If you ever need assistance, just reach out - "
-                "we're always here to help, and our service is always free. "
-                "Thank you for your time today!"
-            ),
-            response_category="keep_communications",
-            conversation_stage=ConversationStage.GOODBYE,
-            end_conversation=True,
-            outcome="keep_communications",
-            start_time=start_time,
-            detected_intent="keep_communications"
-        )
-    
     async def _handle_dnc_confirmation(self, session: CallSession, start_time: float) -> Dict[str, Any]:
-        """Handle when user confirms DNC"""
+        """Handle when user confirms DNC - Second 'No' to communications"""
         logger.info("🚫 Customer confirmed DNC - Ending call")
         
         session.conversation_stage = ConversationStage.GOODBYE
         
         return await self._create_response(
             response_text=(
-                "No problem at all. I'll remove you from our calling list right away. "
-                "You'll receive a confirmation email shortly. Thank you for your time, "
-                "and have a great day!"
+                "Understood, we will make sure you are removed from all future communications "
+                "and send you a confirmation email once that is done. Our contact details will "
+                "be in that email as well, so if you do change your mind in the future please "
+                "feel free to reach out – we are always here to help and our service is always "
+                "free of charge. Have a wonderful day!"
             ),
             response_category="dnc_confirmation",
             conversation_stage=ConversationStage.GOODBYE,
@@ -552,6 +532,28 @@ class VoiceProcessor:
             outcome="dnc_requested",
             start_time=start_time,
             detected_intent="dnc_requested"
+        )
+    
+    async def _handle_keep_communications(self, session: CallSession, start_time: float) -> Dict[str, Any]:
+        """Handle when user wants to keep receiving communications - Second 'Yes'"""
+        logger.info("✅ Customer wants to keep communications - Ending call")
+        
+        session.conversation_stage = ConversationStage.GOODBYE
+        
+        return await self._create_response(
+            response_text=(
+                "Great, we're happy to keep you informed throughout the year regarding the "
+                "ever-changing world of health insurance. If you'd like to connect with one "
+                "of our insurance experts in the future please feel free to reach out – "
+                "we are always here to help and our service is always free of charge. "
+                "Have a wonderful day!"
+            ),
+            response_category="keep_communications",
+            conversation_stage=ConversationStage.GOODBYE,
+            end_conversation=True,
+            outcome="not_interested",
+            start_time=start_time,
+            detected_intent="not_interested"
         )
     
     async def _handle_maybe_response(self, session: CallSession, start_time: float) -> Dict[str, Any]:

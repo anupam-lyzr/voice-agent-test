@@ -1,7 +1,9 @@
 {
   "family": "voice-agent-worker-service",
-  "networkMode": "awsvpc", 
-  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "512",
   "memory": "1024",
   "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
@@ -31,7 +33,7 @@
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/voice-agent-worker",
-          "awslogs-region": "us-east-1", 
+          "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
         }
       }

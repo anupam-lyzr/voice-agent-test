@@ -21,6 +21,7 @@ except ImportError:
 
 from shared.config.settings import settings
 from shared.utils.database import client_repo
+from shared.utils.database import db_client
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,14 @@ class SQSConsumer:
         if AWS_AVAILABLE and settings.aws_region and not is_development:
             try:
                 self.sqs_client = boto3.client('sqs', region_name=settings.aws_region)
-                self.queue_url = f"https://sqs.{settings.aws_region}.amazonaws.com/{settings.aws_account_id}/voice-agent-campaign-queue"
-                logger.info("✅ SQS client initialized")
+                # Use configured SQS queue URL from settings
+                if settings.sqs_queue_url:
+                    self.queue_url = settings.sqs_queue_url
+                    logger.info(f"✅ SQS client initialized with queue: {self.queue_url}")
+                else:
+                    # Fallback to hardcoded URL if not configured
+                    self.queue_url = f"https://sqs.{settings.aws_region}.amazonaws.com/{settings.aws_account_id}/voice-agent-campaign-queue"
+                    logger.warning(f"⚠️ SQS_QUEUE_URL not configured, using fallback: {self.queue_url}")
             except (NoCredentialsError, Exception) as e:
                 logger.warning(f"⚠️ SQS not available: {e}")
                 self.sqs_client = None
@@ -88,7 +95,13 @@ class SQSConsumer:
             return processed_messages
             
         except ClientError as e:
-            logger.error(f"❌ SQS error: {e}")
+            error_code = e.response['Error']['Code']
+            if error_code == 'AWS.SimpleQueueService.NonExistentQueue':
+                logger.warning(f"⚠️ SQS queue does not exist: {self.queue_url}")
+                logger.info("🔧 Falling back to mock queue processing")
+                return await self._mock_queue_processing()
+            else:
+                logger.error(f"❌ SQS error: {e}")
             return []
         except Exception as e:
             logger.error(f"❌ Queue processing error: {e}")
@@ -137,6 +150,16 @@ class SQSConsumer:
         batch_size = body.get('batch_size', 50)
         
         logger.info(f"🚀 Starting campaign: {campaign_id} with batch size: {batch_size}")
+        
+        # Ensure database connection before processing
+        if not await db_client.ensure_connected():
+            logger.error("❌ Cannot process campaign - database not available")
+            return {
+                "type": "start_campaign",
+                "campaign_id": campaign_id,
+                "error": "Database not available",
+                "processed_at": datetime.utcnow().isoformat()
+            }
         
         # Update clients to ready status
         ready_count = await client_repo.mark_clients_ready_for_campaign(batch_size)

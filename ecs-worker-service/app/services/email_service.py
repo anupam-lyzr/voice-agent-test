@@ -164,63 +164,210 @@ class EmailService:
             logger.error(f"❌ Error sending meeting confirmation: {e}")
             return {"success": False, "error": str(e)}
 
-    async def send_conversation_stage_email(self, client_email: str, client_name: str, stage: str, call_summary: Dict[str, Any]) -> bool:
-        """Send email based on conversation stage with proper timing"""
+    async def send_conversation_stage_email(
+        self, 
+        client_email: str, 
+        client_name: str, 
+        stage: str, 
+        call_summary: Dict[str, Any]
+    ) -> bool:
+        """Send email based on conversation stage"""
         try:
-            # Determine email template based on stage
-            email_templates = {
-                "interested": {
-                    "subject": "Thank you for your interest in our services! 🎉",
-                    "html": self._get_interested_email_html(client_name, call_summary),
-                    "text": self._get_interested_email_text(client_name, call_summary)
-                },
-                "not_interested": {
-                    "subject": "Thank you for your time 🙏",
-                    "html": self._get_not_interested_email_html(client_name, call_summary),
-                    "text": self._get_not_interested_email_text(client_name, call_summary)
-                },
-                "follow_up": {
-                    "subject": "Follow-up on our conversation 📞",
-                    "html": self._get_follow_up_email_html(client_name, call_summary),
-                    "text": self._get_follow_up_email_text(client_name, call_summary)
-                },
-                "meeting_scheduled": {
-                    "subject": "Meeting Confirmation - Discovery Call 📅",
-                    "html": self._get_meeting_scheduled_email_html(client_name, call_summary),
-                    "text": self._get_meeting_scheduled_email_text(client_name, call_summary)
-                },
-                "agent_assignment": {
-                    "subject": "New Client Assignment - Action Required 👨‍💼",
-                    "html": self._get_agent_assignment_email_html("Agent", {"client_name": client_name}, call_summary),
-                    "text": self._get_agent_assignment_email_text("Agent", {"client_name": client_name}, call_summary)
-                }
-            }
-
-            template = email_templates.get(stage)
-            if not template:
-                logger.warning(f"Unknown conversation stage: {stage}")
+            logger.info(f"📧 Sending {stage} email to {client_email}")
+            
+            # Get email template based on stage
+            email_content = self._get_email_template(stage, client_name, call_summary)
+            
+            if not email_content:
+                logger.warning(f"⚠️ No email template found for stage: {stage}")
                 return False
-
+            
+            # Send email
             success = await self._send_email(
                 to_email=client_email,
-                subject=template["subject"],
-                html_body=template["html"],
-                text_body=template["text"]
+                subject=email_content["subject"],
+                html_content=email_content["body"],
+                text_content=email_content["body"]
             )
-
+            
             if success:
-                logger.info(f"✅ {stage} email sent to {client_email}")
-                self.emails_sent += 1
+                logger.info(f"✅ {stage} email sent successfully to {client_email}")
             else:
                 logger.error(f"❌ Failed to send {stage} email to {client_email}")
-                self.emails_failed += 1
-
+            
             return success
-
+            
         except Exception as e:
-            logger.error(f"❌ Error sending conversation stage email: {e}")
-            self.emails_failed += 1
+            logger.error(f"❌ Error sending {stage} email: {e}")
             return False
+    
+    def _get_email_template(self, stage: str, client_name: str, call_summary: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Get email template based on stage"""
+        
+        # Clean client name
+        client_name = client_name.strip() if client_name else "there"
+        
+        if stage == "agent_will_reach_out":
+            agent_name = call_summary.get("agent_name", "your agent")
+            return {
+                "subject": "Thank you for your interest - Altruis Advisor Group",
+                "body": f"""CLIENT NAME,
+Thank you for the quick response😊! {agent_name} will be contacting you shortly to schedule a 15 discovery call to get reacquainted with your health insurance situation and determine the next steps. 
+We are looking forward to assisting you!
+Have a wonderful day!
+Alex
+{self._get_email_signature()}"""
+            }
+        
+        elif stage == "interested_no_schedule":
+            agent_name = call_summary.get("agent_name", "your agent")
+            return {
+                "subject": "Thank you for your interest - Altruis Advisor Group",
+                "body": f"""Dear {client_name},
+
+Thank you for your interest in reviewing your health insurance options! {agent_name} will reach out to you directly to discuss your specific needs and schedule a convenient time for your discovery call.
+
+What to Expect:
+• A personalized review of your current situation
+• Discussion of available options and potential savings
+• No-obligation consultation - our services are always free
+• Flexible scheduling to fit your schedule
+
+{agent_name} will contact you within the next 24-48 hours. If you need to reach us sooner, please call us at 833.227.8500.
+
+We look forward to helping you find the best health insurance solution!
+
+Kind Regards,
+Alex
+{self._get_email_signature()}"""
+            }
+        
+        elif stage == "open_slots_email":
+            # This will be handled by Google Calendar integration
+            agent_name = call_summary.get("agent_name", "your agent")
+            available_slots = call_summary.get("available_slots", [])
+            
+            # Format the available slots
+            slots_html = ""
+            if available_slots:
+                for slot in available_slots:
+                    display_time = slot.get("display_time", "Unknown time")
+                    calendar_link = slot.get("calendar_link", "#")
+                    slots_html += f'<p><a href="{calendar_link}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px;">{display_time}</a></p>'
+            else:
+                slots_html = '<p><em>No available slots found. Please contact us directly.</em></p>'
+            
+            return {
+                "subject": f"Schedule your discovery call with {agent_name} - Altruis Advisor Group",
+                "body": f"""Dear {client_name},
+
+{agent_name} has the following available time slots for your 15-minute discovery call:
+
+{slots_html}
+
+Please click on the time that works best for you to schedule your call.
+
+What to Expect:
+• A review of your current policy
+• A review of your personal situation and insurance needs  
+• General Q & A session
+• Identify next steps and schedule follow up call
+
+Need to Reschedule - Please let us know 24 hours in advance and we will be happy to accommodate you.
+
+Kind Regards,
+Alex
+{self._get_email_signature()}"""
+            }
+        
+        elif stage == "meeting_scheduled":
+            agent_name = call_summary.get("agent_name", "your agent")
+            meeting_time = call_summary.get("meeting_time", "TBD")
+            return {
+                "subject": "Your Discovery Call has been scheduled - Altruis Advisor Group",
+                "body": f"""Dear {client_name},
+
+Your Discovery Call has been scheduled, we are looking forward to assisting you!
+
+Meeting Details:
+Date & Time - {meeting_time}
+Duration - 15 minutes
+Format - Voice Call
+Agent - {agent_name}
+
+What to Expect:
+• A review of your current policy
+• A review of your personal situation and insurance needs
+• General Q & A session
+• Identify next steps and schedule follow up call
+
+Need to Reschedule - Please let us know 24 hours in advance and we will be happy to accommodate you.
+
+Kind Regards,
+{agent_name}
+{self._get_agent_signature(agent_name)}"""
+            }
+        
+        elif stage == "keep_communications":
+            return {
+                "subject": "Thank you for your time - Altruis Advisor Group",
+                "body": f"""Hello {client_name}, 
+Thank you for your time today! As requested, we will continue to keep you up to date with the latest and greatest health insurance information. If you'd like to connect with one of our insurance experts at any time, please feel free to reach out. We are always here to help and our services are always free of charge.  
+service@altruisadvisor.com / 833.227.8500
+Kind Regards, 
+Alex
+{self._get_email_signature()}"""
+            }
+        
+        elif stage == "dnc_confirmation":
+            return {
+                "subject": "You've been removed from our calling list - Altruis Advisor Group",
+                "body": f"""Hello {client_name},
+We removed your email address from our correspondence platform so you should not receive any additional communications from our team. If your situation changes and you'd like to connect with one of our insurance experts in the future, please feel free to reach out. We are always here to help and our services are always free of charge. 
+service@altruisadvisor.com / 833.227.8500
+Kind Regards, 
+Alex
+{self._get_email_signature()}"""
+            }
+        
+        elif stage == "follow_up_email":
+            return {
+                "subject": "We tried to reach you - Altruis Advisor Group",
+                "body": f"""Hello {client_name}, 
+Alex here from Altruis Advisor Group (on behalf of our CEO Anthony Fracchia), I just tried contacting you by phone. We've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? As a friendly reminder, our services are provided free of charge 😊.
+Reply "Yes" and one of our insurance experts will reach out to schedule a discovery call to get reacquainted with your specific situation.
+Reply "No" and our team will not contact you unless you reach out in the future.
+Reply "Remove" and we will remove you from all future correspondence
+
+We look forward to hearing back from you
+Have a wonderful day!
+Alex
+{self._get_email_signature()}"""
+            }
+        
+        else:
+            logger.warning(f"⚠️ Unknown email stage: {stage}")
+            return None
+    
+    def _get_email_signature(self) -> str:
+        """Get Alex's email signature"""
+        return """
+--
+Alex
+Altruis Advisor Group
+service@altruisadvisor.com
+833.227.8500
+www.altruisadvisor.com"""
+    
+    def _get_agent_signature(self, agent_name: str) -> str:
+        """Get agent's email signature"""
+        return f"""
+--
+{agent_name}
+Altruis Advisor Group
+service@altruisadvisor.com
+833.227.8500
+www.altruisadvisor.com"""
 
     async def send_agent_assignment_email(self, agent_email: str, agent_name: str, client_info: Dict[str, Any], call_summary: Dict[str, Any]) -> bool:
         """Send email notification to agent about new assignment"""
@@ -280,26 +427,26 @@ class EmailService:
             self.emails_failed += 1
             return False
 
-    async def _send_email(self, to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    async def _send_email(self, to_email: str, subject: str, html_content: str, text_content: str) -> bool:
         """Send email via SMTP (preferred) or SES with HTML and text versions"""
         if not self.is_configured():
             # Mock mode - just log the email
             logger.info(f"📧 MOCK EMAIL - To: {to_email}")
             logger.info(f"📧 MOCK EMAIL - Subject: {subject}")
-            logger.info(f"📧 MOCK EMAIL - HTML Body: {html_body[:200]}...")
+            logger.info(f"📧 MOCK EMAIL - HTML Body: {html_content[:200]}...")
             return True
 
         # Try SMTP first (preferred method)
         if self.smtp_config:
-            return await self._send_email_smtp(to_email, subject, html_body, text_body)
+            return await self._send_email_smtp(to_email, subject, html_content, text_content)
         
         # Fallback to SES SDK
         elif self.ses_client:
-            return await self._send_email_ses(to_email, subject, html_body, text_body)
+            return await self._send_email_ses(to_email, subject, html_content, text_content)
         
         return False
 
-    async def _send_email_smtp(self, to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    async def _send_email_smtp(self, to_email: str, subject: str, html_content: str, text_content: str) -> bool:
         """Send email via SMTP"""
         try:
             # Create message
@@ -310,8 +457,8 @@ class EmailService:
             msg['Reply-To'] = self.smtp_config['reply_to']
             
             # Attach text and HTML parts
-            text_part = MIMEText(text_body, 'plain', 'utf-8')
-            html_part = MIMEText(html_body, 'html', 'utf-8')
+            text_part = MIMEText(text_content, 'plain', 'utf-8')
+            html_part = MIMEText(html_content, 'html', 'utf-8')
             
             msg.attach(text_part)
             msg.attach(html_part)
@@ -329,7 +476,7 @@ class EmailService:
             logger.error(f"❌ SMTP error: {e}")
             return False
 
-    async def _send_email_ses(self, to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    async def _send_email_ses(self, to_email: str, subject: str, html_content: str, text_content: str) -> bool:
         """Send email via SES SDK"""
         try:
             response = self.ses_client.send_email(
@@ -338,8 +485,8 @@ class EmailService:
                 Message={
                     'Subject': {'Data': subject, 'Charset': 'UTF-8'},
                     'Body': {
-                        'Html': {'Data': html_body, 'Charset': 'UTF-8'},
-                        'Text': {'Data': text_body, 'Charset': 'UTF-8'}
+                        'Html': {'Data': html_content, 'Charset': 'UTF-8'},
+                        'Text': {'Data': text_content, 'Charset': 'UTF-8'}
                     }
                 }
             )
@@ -1304,6 +1451,7 @@ Reply "Remove" and we will remove you from all future correspondence
 
 We look forward to hearing back from you
 Have a wonderful day!
+Alex
 {signature_text}
         """.strip()
 
