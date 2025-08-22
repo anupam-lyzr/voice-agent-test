@@ -343,20 +343,44 @@ class LYZRAgentClient:
     ) -> str:
         """Prepare customer message with additional context"""
         
-        # Base message
-        message = f"Customer ({client_name}): {customer_message}"
+        # Build comprehensive context message
+        context_parts = []
         
-        # Add context if available
-        if context:
-            if context.get("is_first_interaction"):
-                message += "\n[Context: This is the first interaction in the call]"
-            
-            if context.get("previous_response"):
-                message += f"\n[Previous agent response: {context['previous_response'][:100]}...]"
-            
-            if context.get("call_duration_seconds"):
-                duration = context["call_duration_seconds"]
-                message += f"\n[Call duration: {duration}s]"
+        # Add conversation stage context
+        if context and context.get("conversation_stage"):
+            stage = context["conversation_stage"]
+            stage_context = {
+                "greeting": "Initial contact - introducing Altruis services and Open Enrollment assistance",
+                "scheduling": "Client interested - discussing consultation options and next steps", 
+                "dnc_check": "Client declined - checking communication preferences"
+            }
+            stage_desc = stage_context.get(stage, f"Stage: {stage}")
+            context_parts.append(f"Conversation Stage: {stage_desc}")
+        
+        # Add client information
+        if client_name:
+            context_parts.append(f"Client Name: {client_name}")
+        
+        # Add interaction context
+        if context and context.get("is_first_interaction"):
+            context_parts.append("First interaction in this call")
+        
+        # Add previous response for continuity
+        if context and context.get("previous_response"):
+            prev_response = context["previous_response"][:150] + "..." if len(context["previous_response"]) > 150 else context["previous_response"]
+            context_parts.append(f"Previous response: {prev_response}")
+        
+        # Add call duration if available
+        if context and context.get("call_duration_seconds"):
+            duration = context["call_duration_seconds"]
+            context_parts.append(f"Call duration: {duration} seconds")
+        
+        # Build the final message
+        if context_parts:
+            context_str = "\n".join([f"[{part}]" for part in context_parts])
+            message = f"{context_str}\n\nCustomer ({client_name}): {customer_message}"
+        else:
+            message = f"Customer ({client_name}): {customer_message}"
         
         return message
     

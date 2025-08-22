@@ -389,7 +389,11 @@ class VoiceProcessor:
                 context={
                     "conversation_stage": session.conversation_stage.value if hasattr(session.conversation_stage, 'value') else session.conversation_stage,
                     "client_name": session.client_data.get("first_name", ""),
-                    "is_first_interaction": len(session.conversation_turns) == 0
+                    "is_first_interaction": len(session.conversation_turns) == 0,
+                    "call_duration_seconds": int((time.time() - session.started_at.timestamp())),
+                    "previous_response": session.conversation_turns[-1].get("response_text", "") if session.conversation_turns else "",
+                    "agent_name": session.client_data.get("last_agent", "our team"),
+                    "client_phone": session.phone_number
                 }
             )
             
