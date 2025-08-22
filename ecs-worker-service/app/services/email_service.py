@@ -182,6 +182,11 @@ class EmailService:
                 logger.warning(f"⚠️ No email template found for stage: {stage}")
                 return False
             
+            logger.info(f"📧 Email template found for stage: {stage}")
+            logger.info(f"📧 Email subject: {email_content.get('subject', 'NO SUBJECT')}")
+            logger.info(f"📧 HTML content length: {len(email_content.get('html_content', ''))}")
+            logger.info(f"📧 Text content length: {len(email_content.get('text_content', ''))}")
+            
             # Send email
             success = await self._send_email(
                 to_email=client_email,
@@ -357,8 +362,10 @@ Alex
             # Use specific agent name if available, otherwise use "our team"
             if agent_name and agent_name != "our team":
                 agent_reference = agent_name
+                signature = self._get_agent_signature(agent_name)
             else:
                 agent_reference = "one of our agents"
+                signature = self._get_email_signature()
             
             return {
                 "subject": "Your Discovery Call has been scheduled - Altruis Advisor Group",
@@ -385,8 +392,8 @@ Alex
 <p><strong>Need to Reschedule</strong> - Please let us know 24 hours in advance and we will be happy to accommodate you.</p>
 
 <p>Kind Regards,<br>
-{agent_name}<br>
-{self._get_agent_signature(agent_name)}</p>""",
+Alex<br>
+{signature}</p>""",
                 "text_content": f"""Dear {client_name},
 
 Your Discovery Call has been scheduled, we are looking forward to assisting you!
@@ -406,8 +413,8 @@ What to Expect:
 Need to Reschedule - Please let us know 24 hours in advance and we will be happy to accommodate you.
 
 Kind Regards,
-{agent_name}
-{self._get_agent_signature(agent_name)}"""
+Alex
+{signature}"""
             }
         
         elif stage == "keep_communications":
@@ -530,8 +537,8 @@ www.altruisadvisor.com"""
             success = await self._send_email(
                 to_email=agent_email,
                 subject=subject,
-                html_body=html_body,
-                text_body=text_body
+                html_content=html_body,
+                text_content=text_body
             )
 
             if success:
@@ -559,8 +566,8 @@ www.altruisadvisor.com"""
             success = await self._send_email(
                 to_email=client_email,
                 subject=subject,
-                html_body=html_body,
-                text_body=text_body
+                html_content=html_body,
+                text_content=text_body
             )
 
             if success:
@@ -583,7 +590,10 @@ www.altruisadvisor.com"""
             # Mock mode - just log the email
             logger.info(f"📧 MOCK EMAIL - To: {to_email}")
             logger.info(f"📧 MOCK EMAIL - Subject: {subject}")
-            logger.info(f"📧 MOCK EMAIL - HTML Body: {html_content[:200]}...")
+            logger.info(f"📧 MOCK EMAIL - HTML Content Length: {len(html_content) if html_content else 0}")
+            logger.info(f"📧 MOCK EMAIL - Text Content Length: {len(text_content) if text_content else 0}")
+            logger.info(f"📧 MOCK EMAIL - HTML Body Preview: {html_content[:300] if html_content else 'EMPTY'}...")
+            logger.info(f"📧 MOCK EMAIL - Text Body Preview: {text_content[:300] if text_content else 'EMPTY'}...")
             return True
 
         # Try SMTP first (preferred method)
@@ -1683,3 +1693,29 @@ We removed your email address from our correspondence platform so you should not
             "success_rate": self.emails_sent / (self.emails_sent + self.emails_failed) * 100 if (self.emails_sent + self.emails_failed) > 0 else 0,
             "configured": self.is_configured()
         }
+
+    def test_email_template(self, stage: str, client_name: str = "Test Client") -> Dict[str, str]:
+        """Test method to verify email template generation"""
+        try:
+            call_summary = {
+                "agent_name": "Test Agent",
+                "meeting_time": "Tomorrow at 2:00 PM",
+                "outcome": "interested"
+            }
+            
+            template = self._get_email_template(stage, client_name, call_summary)
+            
+            if template:
+                logger.info(f"✅ Template test successful for stage: {stage}")
+                logger.info(f"📧 Subject: {template.get('subject', 'NO SUBJECT')}")
+                logger.info(f"📧 HTML Length: {len(template.get('html_content', ''))}")
+                logger.info(f"📧 Text Length: {len(template.get('text_content', ''))}")
+                logger.info(f"📧 HTML Preview: {template.get('html_content', '')[:200]}...")
+                return template
+            else:
+                logger.error(f"❌ No template found for stage: {stage}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Template test failed for stage {stage}: {e}")
+            return {}

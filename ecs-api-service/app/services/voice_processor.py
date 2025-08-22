@@ -34,15 +34,17 @@ class VoiceProcessor:
             "identity_questions": [
                 "who is this", "where are you calling from", "what company", "who are you",
                 "where are you from", "what's your name", "who am i speaking with",
-                "what organization", "what business"
+                "what organization", "what business", "what was your name again",
+                "where are you calling from again"
             ],
             "ai_questions": [
                 "are you a robot", "are you ai", "are you artificial", "are you real",
-                "is this automated", "are you human", "is this a recording"
+                "is this automated", "are you human", "is this a recording", "are you an ai agent"
             ],
             "memory_questions": [
                 "don't remember", "don't recall", "never heard of you", "never worked with",
-                "don't know you", "who did i work with"
+                "don't know you", "who did i work with", "i don't remember working with you",
+                "don't remember working with you", "never worked with you", "don't know you"
             ],
             "repeat_requests": [
                 "can you repeat", "say that again", "didn't catch that", "what did you say",
@@ -122,7 +124,11 @@ class VoiceProcessor:
                 elif self._is_maybe(customer_input):
                     return await self._handle_maybe_response(session, start_time)
                 else:
-                    return await self._handle_unclear_response(session, start_time, "greeting")
+                    # Check if this is an unrecognized question that should go to Lyzr
+                    if self._is_question(customer_input):
+                        return await self._handle_unknown_question(customer_input, session, start_time)
+                    else:
+                        return await self._handle_unclear_response(session, start_time, "greeting")
             
             elif session.conversation_stage == ConversationStage.SCHEDULING:
                 if self._is_interested(customer_input):
@@ -132,7 +138,11 @@ class VoiceProcessor:
                 elif self._is_dnc_request(customer_input):
                     return await self._handle_dnc_request(session, start_time)
                 else:
-                    return await self._handle_unclear_response(session, start_time, "scheduling")
+                    # Check if this is an unrecognized question that should go to Lyzr
+                    if self._is_question(customer_input):
+                        return await self._handle_unknown_question(customer_input, session, start_time)
+                    else:
+                        return await self._handle_unclear_response(session, start_time, "scheduling")
             
             elif session.conversation_stage == ConversationStage.DNC_CHECK:
                 if self._is_interested(customer_input):
@@ -140,7 +150,11 @@ class VoiceProcessor:
                 elif self._is_not_interested(customer_input) or self._is_dnc_request(customer_input):
                     return await self._handle_dnc_confirmation(session, start_time)
                 else:
-                    return await self._handle_unclear_response(session, start_time, "dnc_check")
+                    # Check if this is an unrecognized question that should go to Lyzr
+                    if self._is_question(customer_input):
+                        return await self._handle_unknown_question(customer_input, session, start_time)
+                    else:
+                        return await self._handle_unclear_response(session, start_time, "dnc_check")
             
             # If we're in GOODBYE or any unexpected stage, end the call
             else:
@@ -177,23 +191,23 @@ class VoiceProcessor:
         
         # Identity questions: "Who is this?", "Where are you calling from?"
         if any(phrase in customer_input for phrase in self.response_patterns["identity_questions"]):
-            return await self._handle_identity_question(session, start_time)
+            return await self._handle_identity_question(customer_input, session, start_time)
         
         # AI questions: "Are you an AI?"
         if any(phrase in customer_input for phrase in self.response_patterns["ai_questions"]):
-            return await self._handle_ai_question(session, start_time)
+            return await self._handle_ai_question(customer_input, session, start_time)
         
         # Memory questions: "I don't remember working with you"
         if any(phrase in customer_input for phrase in self.response_patterns["memory_questions"]):
-            return await self._handle_memory_question(session, start_time)
+            return await self._handle_memory_question(customer_input, session, start_time)
         
         # Repeat requests: "Can you say that again?"
         if any(phrase in customer_input for phrase in self.response_patterns["repeat_requests"]):
-            return await self._handle_repeat_request(session, start_time)
+            return await self._handle_repeat_request(customer_input, session, start_time)
         
         return None
     
-    async def _handle_identity_question(self, session: CallSession, start_time: float) -> Dict[str, Any]:
+    async def _handle_identity_question(self, customer_input: str, session: CallSession, start_time: float) -> Dict[str, Any]:
         """Handle 'Who is this?' or 'Where are you calling from?' questions"""
         
         client_name = session.client_data.get("first_name", "")
@@ -213,7 +227,7 @@ class VoiceProcessor:
             detected_intent="identity_question"
         )
     
-    async def _handle_ai_question(self, session: CallSession, start_time: float) -> Dict[str, Any]:
+    async def _handle_ai_question(self, customer_input: str, session: CallSession, start_time: float) -> Dict[str, Any]:
         """Handle 'Are you an AI?' questions"""
         
         return await self._create_response(
@@ -231,7 +245,7 @@ class VoiceProcessor:
             detected_intent="ai_question"
         )
     
-    async def _handle_memory_question(self, session: CallSession, start_time: float) -> Dict[str, Any]:
+    async def _handle_memory_question(self, customer_input: str, session: CallSession, start_time: float) -> Dict[str, Any]:
         """Handle 'I don't remember working with you' questions"""
         
         agent_name = session.client_data.get("last_agent", "our team")
@@ -256,7 +270,7 @@ class VoiceProcessor:
             detected_intent="memory_question"
         )
     
-    async def _handle_repeat_request(self, session: CallSession, start_time: float) -> Dict[str, Any]:
+    async def _handle_repeat_request(self, customer_input: str, session: CallSession, start_time: float) -> Dict[str, Any]:
         """Handle 'Can you repeat that?' requests"""
         
         client_name = session.client_data.get("first_name", "")
@@ -274,6 +288,17 @@ class VoiceProcessor:
             outcome="repeated_message",
             start_time=start_time,
             detected_intent="repeat_request"
+        )
+    
+    async def _handle_unknown_question(self, customer_input: str, session: CallSession, start_time: float) -> Dict[str, Any]:
+        """Handle unrecognized questions by routing to Lyzr agent"""
+        
+        logger.info(f"🤖 Routing unknown question to Lyzr: '{customer_input}'")
+        
+        # Use Lyzr agent for intelligent response
+        return await self.process_with_lyzr_delay_filler(
+            customer_input=customer_input,
+            session=session
         )
     
     async def _handle_interruption(
@@ -410,6 +435,18 @@ class VoiceProcessor:
     def _is_dnc_request(self, text: str) -> bool:
         """Check if input is a DNC request"""
         return any(phrase in text for phrase in self.response_patterns["dnc_requests"])
+    
+    def _is_question(self, text: str) -> bool:
+        """Check if input is a question (not already handled by static responses)"""
+        # Question indicators
+        question_words = ["what", "when", "where", "who", "why", "how", "which", "whose", "whom"]
+        question_indicators = ["?", "can you", "could you", "would you", "will you", "do you", "does", "is", "are", "was", "were"]
+        
+        # Check if text contains question words or indicators
+        has_question_word = any(word in text for word in question_words)
+        has_question_indicator = any(indicator in text for indicator in question_indicators)
+        
+        return has_question_word or has_question_indicator
     
     # --- State transition handlers (same as before) ---
     
