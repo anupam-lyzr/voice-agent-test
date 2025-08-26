@@ -179,6 +179,7 @@ class CallSession(BaseModel):
     # LYZR integration
     lyzr_agent_id: str = Field(..., description="LYZR agent ID for conversations")
     lyzr_session_id: str = Field(..., description="LYZR session ID")
+    lyzr_pending_task: Optional[Any] = Field(None, description="Pending LYZR processing task", exclude=True)
     
     # Timing
     started_at: Optional[datetime] = Field(default_factory=datetime.utcnow, description="When call started")

@@ -48,7 +48,7 @@ class S3AudioService:
     
     async def get_audio_file_path(self, audio_type: str, filename: str) -> Optional[Path]:
         """
-        Get audio file path - from S3 in production, local in development
+        Get audio file path with improved priority: Local → S3
         
         Args:
             audio_type: Type of audio (segments, names/clients, names/agents)
@@ -57,12 +57,21 @@ class S3AudioService:
         Returns:
             Path to the audio file or None if not found
         """
-        if not self.is_production():
-            # In development, use local files
-            return self._get_local_audio_path(audio_type, filename)
+        # 1. Always check local first (fastest, no network)
+        local_path = self._get_local_audio_path(audio_type, filename)
+        if local_path:
+            logger.debug(f"📁 Found local audio file: {audio_type}/{filename}")
+            return local_path
         
-        # In production, use S3
-        return await self._get_s3_audio_path(audio_type, filename)
+        # 2. Check S3 if in production
+        if self.is_production():
+            s3_path = await self._get_s3_audio_path(audio_type, filename)
+            if s3_path:
+                logger.debug(f"☁️ Found S3 audio file: {audio_type}/{filename}")
+                return s3_path
+        
+        logger.warning(f"⚠️ Audio file not found: {audio_type}/{filename}")
+        return None
     
     def _get_local_audio_path(self, audio_type: str, filename: str) -> Optional[Path]:
         """Get local audio file path"""

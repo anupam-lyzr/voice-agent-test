@@ -1026,14 +1026,16 @@ async def process_speech_webhook(
                 # End call after 3 silence attempts
                 return await EnhancedTwiMLManager.create_final_silence_response()
         
-        # Process customer input with enhanced voice processor
-        process_result = await voice_processor.process_customer_input(
+        # Process customer input with enhanced voice processor and LYZR checking
+        process_result = await voice_processor.process_customer_input_with_lyzr_check(
             customer_input=SpeechResult,
             session=session,
             confidence=Confidence or 0.0
         )
         
         logger.info(f"🔄 Speech processed - Response: '{process_result.get('response_text', '')}' - Category: {process_result.get('response_category', '')}")
+        
+
         
         # Update conversation history
         turn = ConversationTurn(
@@ -1049,6 +1051,11 @@ async def process_speech_webhook(
         # Update session state
         session.conversation_stage = process_result.get("conversation_stage", session.conversation_stage)
         session.no_speech_count = 0  # Reset on successful speech
+        
+        # Set final outcome if conversation is ending
+        if process_result.get("end_conversation", False):
+            session.final_outcome = process_result.get("outcome", "completed")
+            logger.info(f"✅ Conversation ending - Set final outcome: {session.final_outcome}")
         
         # Save updated session
         await enhanced_cache_session(session)
@@ -1091,8 +1098,8 @@ async def handle_interruption(
         
         logger.info(f"✅ Session found for interruption: {CallSid} - Stage: {session.conversation_stage}")
         
-        # Process interruption with voice processor
-        process_result = await voice_processor.process_customer_input(
+        # Process interruption with voice processor and LYZR checking
+        process_result = await voice_processor.process_customer_input_with_lyzr_check(
             customer_input=SpeechResult or "",
             session=session,
             confidence=Confidence or 0.0,
@@ -1166,8 +1173,14 @@ async def status_webhook(
                 
                 # Determine final outcome based on conversation
                 if hasattr(session, 'conversation_turns') and session.conversation_turns:
-                    # Analyze the entire conversation to determine outcome
-                    session.final_outcome = _analyze_conversation_outcome(session.conversation_turns)
+                    # Check if outcome is already set by voice processor
+                    if hasattr(session, 'final_outcome') and session.final_outcome and session.final_outcome != "completed":
+                        # Use the outcome already set by voice processor
+                        logger.info(f"✅ Using voice processor outcome: {session.final_outcome}")
+                    else:
+                        # Analyze the entire conversation to determine outcome
+                        session.final_outcome = _analyze_conversation_outcome(session.conversation_turns)
+                        logger.info(f"✅ Analyzed conversation outcome: {session.final_outcome}")
                 else:
                     session.final_outcome = CallStatus
                 
@@ -1260,7 +1273,12 @@ def _analyze_conversation_outcome(conversation_turns: List[ConversationTurn]) ->
         elif any(keyword in customer_speech_combined for keyword in interested_keywords):
             return "interested"  # First "Yes" - agent will reach out
         elif any(keyword in customer_speech_combined for keyword in not_interested_keywords):
-            return "not_interested"
+            # Check if there are multiple "no" responses (indicating DNC)
+            no_count = customer_speech_combined.count("no")
+            if no_count >= 2:
+                return "dnc_requested"  # Multiple "no" responses likely indicate DNC
+            else:
+                return "not_interested"
         else:
             # If no specific outcome detected, check conversation length
             if len(conversation_turns) < 3:

@@ -1,11 +1,12 @@
 {
-  "last_updated": "2025-08-20T11:23:11.919036",
+  "last_updated": "2025-08-22T12:38:03.764328",
   "segments": {
-    "count": 34,
+    "count": 38,
     "files": [
       "agent_intro_middle",
       "agent_intro_start",
       "ai_clarification",
+      "busy_call_back",
       "clarification",
       "confusion_clarification",
       "default_greeting_middle",
@@ -17,7 +18,9 @@
       "goodbye",
       "hello",
       "identity_clarification",
+      "interruption_acknowledgment",
       "keep_communications",
+      "lyzr_delay_filler",
       "medicare_greeting_middle",
       "medicare_greeting_start",
       "medicare_voicemail_middle",
@@ -36,6 +39,7 @@
       "repeat_response",
       "schedule_middle",
       "schedule_start",
+      "silence_detection",
       "voicemail_start"
     ]
   },
@@ -141,32 +145,26 @@
   },
   "concatenation_templates": {
     "non_medicare_greeting": [
-      "non_medicare_greeting_start",
       "[CLIENT_NAME]",
       "non_medicare_greeting_middle"
     ],
     "non_medicare_voicemail": [
-      "non_medicare_voicemail_start",
       "[CLIENT_NAME]",
       "non_medicare_voicemail_middle"
     ],
     "medicare_greeting": [
-      "medicare_greeting_start",
       "[CLIENT_NAME]",
       "medicare_greeting_middle"
     ],
     "medicare_voicemail": [
-      "medicare_voicemail_start",
       "[CLIENT_NAME]",
       "medicare_voicemail_middle"
     ],
     "default_greeting": [
-      "default_greeting_start",
       "[CLIENT_NAME]",
       "default_greeting_middle"
     ],
     "default_voicemail": [
-      "default_voicemail_start",
       "[CLIENT_NAME]",
       "default_voicemail_middle"
     ],

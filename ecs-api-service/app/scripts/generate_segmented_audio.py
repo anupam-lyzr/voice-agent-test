@@ -115,7 +115,13 @@ SCRIPT_SEGMENTS = {
     # NO SPEECH HANDLING SCRIPTS
     "no_speech_first": "I'm sorry, I can't seem to hear you clearly. If you said something, could you please speak a bit louder? I'm here to help.",
     "no_speech_second": "I'm still having trouble hearing you. If you're there, please try speaking directly into your phone. Are you interested in reviewing your health insurance options?",
-    "no_speech_final": "I apologize, but I'm having difficulty hearing your response. If you'd like to speak with someone, please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you and have a great day."
+    "no_speech_final": "I apologize, but I'm having difficulty hearing your response. If you'd like to speak with someone, please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you and have a great day.",
+    
+    # NEW: Additional response categories from updated voice processor
+    "lyzr_delay_filler": "That's a great question, let me make sure I give you the most accurate information.",
+    "interruption_acknowledgment": "Of course, I'm here to help. What would you like to know?",
+    "busy_call_back": "No problem at all! I'll call you back at a better time. Have a great day!",
+    "silence_detection": "I'm sorry, I didn't hear anything. Did you say something?"
 }
 
 # AGENT NAMES (from the Excel data)

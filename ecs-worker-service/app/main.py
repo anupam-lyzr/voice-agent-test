@@ -743,6 +743,7 @@ class WorkerService:
             "send_email_invite": "open_slots_email",
             "scheduled": "meeting_scheduled",
             "not_interested": "keep_communications",
+            "keep_communications": "keep_communications",  # Added: New outcome for keep communications
             "dnc_requested": "dnc_confirmation",
             "no_contact": "follow_up_email",
             "voicemail": "follow_up_email",

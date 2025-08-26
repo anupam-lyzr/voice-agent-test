@@ -63,7 +63,8 @@ class HybridTTSService:
                 "dnc_confirmation", "keep_communications", "not_interested",
                 "goodbye", "clarification", "error", "identity_clarification",
                 "ai_clarification", "memory_clarification", "repeat_response", 
-                "confusion_clarification"
+                "confusion_clarification", "interruption_acknowledgment", "lyzr_delay_filler",
+                "busy_call_back", "silence_detection"
             ]:
                 return await self._handle_static_response(response_type, start_time)
             elif response_type in ["silence_detection", "no_speech_first", "no_speech_second", "no_speech_final"]:
@@ -213,11 +214,18 @@ class HybridTTSService:
                 "goodbye": "Thank you for your time today. Have a wonderful day!",
                 "clarification": "I want to make sure I understand correctly. Can we help service you this year during Open Enrollment?",
                 "error": "I apologize, I'm having some technical difficulties. Please call us back at 8-3-3, 2-2-7, 8-5-0-0.",
-                "identity_clarification": "I'm Alex calling from Altruis Advisor Group. We're a health insurance agency that has helped you with your coverage in the past.",
-                "ai_clarification": "I'm Alex, a digital assistant from Altruis Advisor Group. I'm here to help connect you with our team regarding your health insurance options.",
-                "memory_clarification": "I understand, sometimes it's been a while since we last spoke. You worked with our team here at Altruis Advisor Group for your health insurance needs.",
-                "repeat_response": "Of course! I'm Alex from Altruis Advisor Group. We've helped you with health insurance before, and I'm calling to see if we can assist you during Open Enrollment this year.",
-                "confusion_clarification": "Let me clarify. I'm Alex from Altruis Advisor Group, a health insurance agency. We're calling because it's Open Enrollment season."
+                "identity_clarification": "I'm Alex calling from Altruis Advisor Group. We're a health insurance agency that has helped you with your coverage in the past. I'm calling to see if we can assist you during this year's Open Enrollment. Are you interested in reviewing your options?",
+                "ai_clarification": "I'm Alex, a digital assistant from Altruis Advisor Group. I'm here to help connect you with our team regarding your health insurance options. We've helped you in the past and I wanted to see if we can assist you during Open Enrollment this year.",
+                "memory_clarification": "I understand, sometimes it's been a while since we last spoke. You worked with our team here at Altruis Advisor Group for your health insurance needs. Since it's Open Enrollment season, I wanted to reach out to see if you'd like assistance this year.",
+                "repeat_response": "Of course! I'm Alex from Altruis Advisor Group. We've helped you with health insurance before, and I'm calling to see if we can assist you during Open Enrollment this year. Are you interested in reviewing your options?",
+                "confusion_clarification": "Let me clarify. I'm Alex from Altruis Advisor Group, a health insurance agency. We're calling because it's Open Enrollment season and we've helped you with coverage in the past.",
+                "no_speech_first": "I'm sorry, I didn't hear anything. Did you say something?",
+                "no_speech_second": "I'm sorry, I didn't hear anything. Did you say something?",
+                "no_speech_final": "You can call us back at 8-3-3, 2-2-7, 8-5-0-0. Have a great day.",
+                "lyzr_delay_filler": "That's a great question, let me make sure I give you the most accurate information.",
+                "lyzr_response": "Thank you for your question. Let me provide you with the most helpful information.",
+                "interruption_acknowledgment": "Yes? How can I help you?",
+                "repeat_request": "Of course! I'm Alex from Altruis Advisor Group. We've helped you with health insurance before, and I'm calling to see if we can assist you during Open Enrollment this year."
             }
             
             fallback_text = fallback_texts.get(response_type, "Thank you for calling.")

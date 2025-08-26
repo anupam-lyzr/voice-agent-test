@@ -98,19 +98,82 @@ class SegmentedAudioService:
             },
             "clarification": {
                 "segments": ["clarification"],
-                "description": "Clarification request"
+                "description": "General clarification"
             },
+            # Voicemail templates (restored)
             "voicemail": {
                 "segments": ["[CLIENT_NAME]", "default_voicemail_middle"],
                 "description": "Personalized voicemail with client name and natural phone number"
             },
             "non_medicare_voicemail": {
                 "segments": ["[CLIENT_NAME]", "non_medicare_voicemail_middle"],
-                "description": "Non-Medicare voicemail with client name"
+                "description": "Non-Medicare client voicemail with client name"
             },
             "medicare_voicemail": {
                 "segments": ["[CLIENT_NAME]", "medicare_voicemail_middle"],
-                "description": "Medicare voicemail with client name"
+                "description": "Medicare client voicemail with client name"
+            },
+            # NEW: Missing templates that were causing errors
+            "identity_clarification": {
+                "segments": ["identity_clarification"],
+                "description": "Identity clarification response"
+            },
+            "ai_clarification": {
+                "segments": ["ai_clarification"],
+                "description": "AI clarification response"
+            },
+            "memory_clarification": {
+                "segments": ["memory_clarification"],
+                "description": "Memory clarification response"
+            },
+            "repeat_response": {
+                "segments": ["repeat_response"],
+                "description": "Repeat request response"
+            },
+            "confusion_clarification": {
+                "segments": ["confusion_clarification"],
+                "description": "Confusion clarification response"
+            },
+            "no_speech_first": {
+                "segments": ["no_speech_first"],
+                "description": "First silence detection response"
+            },
+            "no_speech_second": {
+                "segments": ["no_speech_second"],
+                "description": "Second silence detection response"
+            },
+            "no_speech_final": {
+                "segments": ["no_speech_final"],
+                "description": "Final silence detection response"
+            },
+            "lyzr_delay_filler": {
+                "segments": ["lyzr_delay_filler"],
+                "description": "LYZR delay filler response"
+            },
+            "lyzr_response": {
+                "segments": ["lyzr_response"],
+                "description": "LYZR response"
+            },
+            "interruption_acknowledgment": {
+                "segments": ["interruption_acknowledgment"],
+                "description": "Interruption acknowledgment response"
+            },
+            "repeat_request": {
+                "segments": ["repeat_request"],
+                "description": "Repeat request response"
+            },
+            "error": {
+                "segments": ["error"],
+                "description": "Error response"
+            },
+            # NEW: Missing templates for updated voice processor
+            "busy_call_back": {
+                "segments": ["busy_call_back"],
+                "description": "Busy/call back response"
+            },
+            "silence_detection": {
+                "segments": ["silence_detection"],
+                "description": "Silence detection response"
             }
         }
         
@@ -327,22 +390,31 @@ class SegmentedAudioService:
                         return None
                 
                 else:
-                    # Get segment audio
+                    # Get segment audio with improved priority: Local → S3 → On-demand
                     filename = f"{segment}.mp3"
                     
-                    # Use S3 service if available
+                    # 1. First check local audio-generation folder
+                    segment_file = self.segments_dir / filename
+                    if segment_file.exists():
+                        logger.info(f"📁 Using local segment: {segment}")
+                        audio_files.append(str(segment_file))
+                        continue
+                    
+                    # 2. Check S3 if available
                     if self.s3_audio_service:
                         audio_path = await self.s3_audio_service.get_audio_file_path("segments", filename)
                         if audio_path:
+                            logger.info(f"☁️ Using S3 segment: {segment}")
                             audio_files.append(str(audio_path))
                             continue
                     
-                    # Fallback to local files
-                    segment_file = self.segments_dir / filename
-                    if segment_file.exists():
-                        audio_files.append(str(segment_file))
+                    # 3. Generate on-demand if not found anywhere
+                    logger.info(f"🔄 Generating segment on-demand: {segment}")
+                    generated_path = await self._generate_segment_audio(segment)
+                    if generated_path:
+                        audio_files.append(str(generated_path))
                     else:
-                        logger.error(f"❌ Segment not found: {segment}")
+                        logger.error(f"❌ Failed to generate segment: {segment}")
                         return None
             
             if not audio_files:
@@ -407,53 +479,59 @@ class SegmentedAudioService:
                 # For all other contexts, use just the client name (no "Hello" prefix)
                 filename = f"{name.lower()}.mp3"
                 
-                # Use S3 service if available
+                # 1. First check local audio-generation folder
+                name_file = self.client_names_dir / filename
+                if name_file.exists():
+                    logger.info(f"📁 Using local client name: {name}")
+                    return str(name_file)
+                
+                # 2. Check S3 if available
                 if self.s3_audio_service:
                     audio_path = await self.s3_audio_service.get_audio_file_path("names/clients", filename)
                     if audio_path:
+                        logger.info(f"☁️ Using S3 client name: {name}")
                         return str(audio_path)
                 
-                # Fallback to local files
-                name_file = self.client_names_dir / filename
-                if name_file.exists():
-                    return str(name_file)
-                
-                # Try first name only
+                # 3. Try first name only (local → S3)
                 first_name = name.split()[0].lower()
                 filename = f"{first_name}.mp3"
                 
+                name_file = self.client_names_dir / filename
+                if name_file.exists():
+                    logger.info(f"📁 Using local first name: {first_name}")
+                    return str(name_file)
+                
                 if self.s3_audio_service:
                     audio_path = await self.s3_audio_service.get_audio_file_path("names/clients", filename)
                     if audio_path:
+                        logger.info(f"☁️ Using S3 first name: {first_name}")
                         return str(audio_path)
                 
-                name_file = self.client_names_dir / filename
-                if name_file.exists():
-                    return str(name_file)
-                else:
-                    # Generate on-demand if not found
-                    logger.info(f"🔄 Generating missing client name: {name}")
-                    return await self._generate_name_audio(name, "client")
+                # 4. Generate on-demand if not found anywhere
+                logger.info(f"🔄 Generating client name on-demand: {name}")
+                return await self._generate_name_audio(name, "client")
             
             elif name_type == "agent":
-                # Handle agent name audio
+                # Handle agent name audio with improved priority: Local → S3 → On-demand
                 agent_filename = name.lower().replace(' ', '_').replace('.', '')
                 filename = f"{agent_filename}.mp3"
                 
-                # Use S3 service if available
+                # 1. First check local audio-generation folder
+                name_file = self.agent_names_dir / filename
+                if name_file.exists():
+                    logger.info(f"📁 Using local agent name: {name}")
+                    return str(name_file)
+                
+                # 2. Check S3 if available
                 if self.s3_audio_service:
                     audio_path = await self.s3_audio_service.get_audio_file_path("names/agents", filename)
                     if audio_path:
+                        logger.info(f"☁️ Using S3 agent name: {name}")
                         return str(audio_path)
                 
-                # Fallback to local files
-                name_file = self.agent_names_dir / filename
-                if name_file.exists():
-                    return str(name_file)
-                else:
-                    # Generate on-demand if not found
-                    logger.info(f"🔄 Generating missing agent name: {name}")
-                    return await self._generate_name_audio(name, "agent")
+                # 3. Generate on-demand if not found anywhere
+                logger.info(f"🔄 Generating agent name on-demand: {name}")
+                return await self._generate_name_audio(name, "agent")
             
             return None
         
@@ -492,6 +570,98 @@ class SegmentedAudioService:
         except Exception as e:
             logger.error(f"❌ Name generation error: {e}")
             return None
+    
+    async def _generate_segment_audio(self, segment_name: str) -> Optional[str]:
+        """Generate audio for a segment on-demand"""
+        
+        try:
+            # Import ElevenLabs client
+            from services.elevenlabs_client import elevenlabs_client
+            
+            # Get the text for this segment from the script segments
+            # We need to import the script segments from the generation script
+            script_segments = self._get_script_segments()
+            text = script_segments.get(segment_name, "")
+            
+            if not text:
+                logger.error(f"❌ No text found for segment: {segment_name}")
+                return None
+            
+            logger.info(f"🎵 Generating segment audio: {segment_name} - '{text[:50]}...'")
+            
+            result = await elevenlabs_client.generate_speech(text)
+            
+            if result.get("success") and result.get("audio_data"):
+                # Save to segments directory
+                filename = f"{segment_name}.mp3"
+                save_path = self.segments_dir / filename
+                
+                # Ensure directory exists
+                self.segments_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Save file
+                with open(save_path, "wb") as f:
+                    f.write(result["audio_data"])
+                
+                logger.info(f"✅ Generated segment audio: {segment_name}")
+                return str(save_path)
+            
+            logger.error(f"❌ Failed to generate segment: {segment_name}")
+            return None
+        
+        except Exception as e:
+            logger.error(f"❌ Segment generation error: {e}")
+            return None
+    
+    def _get_script_segments(self) -> Dict[str, str]:
+        """Get script segments text for on-demand generation"""
+        # This should match the SCRIPT_SEGMENTS from generate_segmented_audio.py
+        return {
+            # Greeting segments
+            "greeting_middle": ", Alex here from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+            "non_medicare_greeting_middle": ", Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group, we've helped you with your health insurance needs in the past and I'm reaching out to see if we can be of service to you this year during Open Enrollment? A simple 'Yes' or 'No' is fine, and remember, our services are completely free of charge.",
+            "medicare_greeting_middle": ", this is Alex from Altruis Advisor Group. We've helped you with your health insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+            "default_greeting_middle": ", this is Alex from Altruis Advisor Group. We've helped you with your insurance needs in the past and I just wanted to reach out to see if we can be of service to you this year during Open Enrollment? A simple Yes or No is fine, and remember, our services are completely free of charge.",
+            
+            # Agent segments
+            "agent_intro_start": "Great, looks like ",
+            "agent_intro_middle": " was the last agent you worked with here at Altruis. Would you like to schedule a quick 15-minute discovery call with them to get reacquainted? A simple Yes or No will do!",
+            "schedule_start": "Perfect! I'll send you an email shortly with ",
+            "schedule_middle": "available time slots. You can review the calendar and choose a time that works best for your schedule. Thank you so much for your time today, and have a wonderful day!",
+            "no_schedule_start": "No problem, ",
+            "no_schedule_middle": " will reach out to you and the two of you can work together to determine the best next steps. We look forward to servicing you, have a wonderful day!",
+            
+            # Voicemail segments
+            "non_medicare_voicemail_middle": ", Alex calling on behalf of Anthony Fracchia and Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!",
+            "medicare_voicemail_middle": ", Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!",
+            "default_voicemail_middle": ", Alex here from Altruis Advisor Group. We've helped with your health insurance needs in the past and we wanted to reach out to see if we could be of assistance this year during Open Enrollment. There have been a number of important changes to the Affordable Care Act that may impact your situation - so it may make sense to do a quick policy review. As always, our services are completely free of charge - if you'd like to review your policy please call us at 8-3-3, 2-2-7, 8-5-0-0. We look forward to hearing from you - take care!",
+            
+            # Static responses
+            "dnc_confirmation": "Understood, we will make sure you are removed from all future communications and send you a confirmation email once that is done. If you'd like to connect with one of our insurance experts in the future please feel free to reach out — we are always here to help and our service is always free of charge. Have a wonderful day!",
+            "keep_communications": "Great! We'll keep you in the loop with helpful health insurance updates throughout the year. If you ever need assistance, just reach out - we're always here to help, and our service is always free. Thank you for your time today!",
+            "not_interested_start": "No problem, would you like to continue receiving general health insurance communications from our team? Again, a simple Yes or No will do!",
+            "goodbye": "Thank you for your time today. Have a wonderful day!",
+            "clarification": "I want to make sure I understand correctly. Can we help service you this year during Open Enrollment? Please say Yes if you're interested, or No if you're not interested.",
+            "error": "I apologize, I'm having some technical difficulties. Please call us back at 8-3-3, 2-2-7, 8-5-0-0.",
+            
+            # Clarifying responses
+            "identity_clarification": "I'm Alex calling from Altruis Advisor Group. We're a health insurance agency that has helped you with your coverage in the past. We're reaching out to see if we can assist you during this year's Open Enrollment period. Are you interested in reviewing your options?",
+            "ai_clarification": "I'm Alex, a digital assistant from Altruis Advisor Group. I'm here to help connect you with our team regarding your health insurance options during Open Enrollment. We've worked with you before and wanted to see if we can be of service again this year. Are you interested?",
+            "memory_clarification": "I understand, sometimes it's been a while since we last spoke. You worked with our team here at Altruis Advisor Group for your health insurance needs. We're reaching out because Open Enrollment is here, and we wanted to see if we can help you review your options again this year. Are you interested?",
+            "repeat_response": "Of course! I'm Alex from Altruis Advisor Group. We've helped you with health insurance before, and I'm calling to see if we can assist you during Open Enrollment this year. Are you interested in reviewing your options? A simple yes or no is fine.",
+            "confusion_clarification": "Let me clarify. I'm Alex from Altruis Advisor Group, a health insurance agency. We're calling because it's Open Enrollment season and we wanted to see if you'd like help reviewing your health insurance options. We've assisted you before. Would you be interested? Just yes or no is fine.",
+            
+            # No speech handling
+            "no_speech_first": "I'm sorry, I can't seem to hear you clearly. If you said something, could you please speak a bit louder? I'm here to help.",
+            "no_speech_second": "I'm still having trouble hearing you. If you're there, please try speaking directly into your phone. Are you interested in reviewing your health insurance options?",
+            "no_speech_final": "I apologize, but I'm having difficulty hearing your response. If you'd like to speak with someone, please call us back at 8-3-3, 2-2-7, 8-5-0-0. Thank you and have a great day.",
+            
+            # Additional response categories
+            "lyzr_delay_filler": "That's a great question, let me make sure I give you the most accurate information.",
+            "interruption_acknowledgment": "Of course, I'm here to help. What would you like to know?",
+            "busy_call_back": "No problem at all! I'll call you back at a better time. Have a great day!",
+            "silence_detection": "I'm sorry, I didn't hear anything. Did you say something?"
+        }
     
     async def _generate_hello_combination(self, name: str) -> Optional[str]:
         """Generate 'Hello {client_name}' combination on-demand"""

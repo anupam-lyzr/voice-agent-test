@@ -303,25 +303,49 @@ Alex
             else:
                 agent_reference = "our team"
             
-            # Format the available slots
+            # Format the available slots properly
             slots_html = ""
-            if available_slots:
-                for slot in available_slots:
+            slots_text = ""
+            if available_slots and len(available_slots) > 0:
+                for i, slot in enumerate(available_slots, 1):
                     display_time = slot.get("display_time", "Unknown time")
                     calendar_link = slot.get("calendar_link", "#")
-                    slots_html += f'<p><a href="{calendar_link}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px;">{display_time}</a></p>'
+                    start_time = slot.get("start_time", "")
+                    end_time = slot.get("end_time", "")
+                    
+                    # Create a more descriptive time display
+                    if start_time and end_time:
+                        try:
+                            # Parse the ISO format time
+                            start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                            end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                            time_display = f"{start_dt.strftime('%A, %B %d at %I:%M %p')} - {end_dt.strftime('%I:%M %p')}"
+                        except:
+                            time_display = display_time
+                    else:
+                        time_display = display_time
+                    
+                    # HTML version with styled buttons
+                    slots_html += f'''
+                    <div style="margin: 15px 0; padding: 10px; border: 1px solid #e0e0e0; border-radius: 8px; background-color: #f9f9f9;">
+                        <a href="{calendar_link}" style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold; font-size: 14px;">
+                            📅 {time_display}
+                        </a>
+                    </div>'''
+                    
+                    # Text version
+                    slots_text += f"{i}. {time_display}\n   Click here: {calendar_link}\n\n"
             else:
-                slots_html = '<p><em>No available slots found. Please contact us directly.</em></p>'
+                slots_html = '<p><em>No available slots found at this time. Please contact us directly at 833.227.8500 to schedule your call.</em></p>'
+                slots_text = "No available slots found at this time. Please contact us directly at 833.227.8500 to schedule your call."
             
             return {
                 "subject": f"Schedule your discovery call with {agent_reference} - Altruis Advisor Group",
                 "html_content": f"""<p>Dear {client_name},</p>
 
-<p>{agent_reference} has the following available time slots for your 15-minute discovery call:</p>
+<p>Great! {agent_reference} has the following available time slots for your 15-minute discovery call:</p>
 
 {slots_html}
-
-<p>Please click on the time that works best for you to schedule your call.</p>
 
 <p><strong>What to Expect:</strong></p>
 <ul>
@@ -338,9 +362,9 @@ Alex<br>
 {self._get_email_signature()}</p>""",
                 "text_content": f"""Dear {client_name},
 
-{agent_reference} has the following available time slots for your 15-minute discovery call:
+Great! {agent_reference} has the following available time slots for your 15-minute discovery call:
 
-Please click on the time that works best for you to schedule your call.
+{slots_text}
 
 What to Expect:
 • A review of your current policy

@@ -68,8 +68,15 @@ class Settings(BaseSettings):
     capsule_api_url: Optional[str] = Field(default=None)
 
     # Google Calendar Integration
-    google_calendar_client_id: Optional[str] = Field(default=None)
-    google_calendar_client_secret: Optional[str] = Field(default=None)
+    # google_calendar_client_id: Optional[str] = Field(default=None)
+    # google_calendar_client_secret: Optional[str] = Field(default=None)
+    google_service_account_email: Optional[str] = Field(default=None)
+    google_service_account_private_key: Optional[str] = Field(default=None)
+    google_service_account_project_id: Optional[str] = Field(default=None)
+    google_calendar_primary_id: Optional[str] = Field(default="primary")
+    
+    # Testing Configuration
+    testing_mode: bool = Field(default=False)
 
     # Email Configuration (SES/SMTP)
     ses_region: Optional[str] = Field(default=None)
@@ -116,6 +123,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra fields instead of forbidding them
 
     def is_production(self) -> bool:
         """Check if running in production environment"""

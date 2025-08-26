@@ -42,7 +42,9 @@ class LYZRAgentClient:
         
         # Rate limiting
         self.last_request_time = 0
-        self.min_request_interval = 1.0  # Minimum 1 second between requests
+        self.min_request_interval = 2.0  # Increased to 2 seconds between requests
+        self.max_requests_per_minute = 30  # Limit requests per minute
+        self.request_times = []  # Track request times for rate limiting
         
         # Session management
         self.active_sessions = {}
@@ -110,15 +112,28 @@ class LYZRAgentClient:
         start_time = time.time()
         
         try:
-            # Rate limiting - ensure minimum interval between requests
+            # Enhanced rate limiting
             current_time = time.time()
+            
+            # Clean old request times (older than 1 minute)
+            self.request_times = [t for t in self.request_times if current_time - t < 60]
+            
+            # Check if we're at the rate limit
+            if len(self.request_times) >= self.max_requests_per_minute:
+                wait_time = 60 - (current_time - self.request_times[0])
+                if wait_time > 0:
+                    logger.info(f"⏱️ Rate limit reached, waiting {wait_time:.1f}s")
+                    await asyncio.sleep(wait_time)
+            
+            # Ensure minimum interval between requests
             time_since_last = current_time - self.last_request_time
             if time_since_last < self.min_request_interval:
                 wait_time = self.min_request_interval - time_since_last
                 logger.info(f"⏱️ Rate limiting: waiting {wait_time:.1f}s")
                 await asyncio.sleep(wait_time)
             
-            self.last_request_time = time.time()
+            self.last_request_time = current_time
+            self.request_times.append(current_time)
             
             # Get session info
             session_info = self.active_sessions.get(session_id, {})
@@ -180,7 +195,31 @@ class LYZRAgentClient:
                 logger.warning(f"⚠️ {error_msg} for conversation")
                 self.errors_count += 1
                 
-                # Provide fallback response
+                # Wait and retry once for rate limit
+                logger.info("🔄 Waiting 5 seconds and retrying...")
+                await asyncio.sleep(5)
+                
+                try:
+                    # Retry the request
+                    response = await self.session.post(url, headers=headers, json=data)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        agent_response = result.get("response", "").strip()
+                        
+                        logger.info(f"✅ Retry successful: '{agent_response[:50]}...'")
+                        
+                        return {
+                            "success": True,
+                            "response": agent_response,
+                            "latency_ms": latency,
+                            "session_ended": self._should_end_conversation(agent_response, customer_message),
+                            "retry_used": True
+                        }
+                except Exception as retry_error:
+                    logger.error(f"❌ Retry failed: {retry_error}")
+                
+                # Provide fallback response if retry fails
                 fallback_response = self._get_fallback_response(customer_message)
                 
                 return {
@@ -212,6 +251,8 @@ class LYZRAgentClient:
         except Exception as e:
             latency = (time.time() - start_time) * 1000
             logger.error(f"❌ LYZR conversation failed: {e}")
+            error_msg = f"LYZR processing error: {str(e)}"
+            logger.error(f"❌ {error_msg}")
             self.errors_count += 1
             
             # Provide fallback response
@@ -219,9 +260,9 @@ class LYZRAgentClient:
             
             return {
                 "success": False,
-                "error": str(e),
+                "error": error_msg,
                 "response": fallback_response,
-                "latency_ms": latency,
+                "latency_ms": (time.time() - start_time) * 1000,
                 "session_ended": True,
                 "fallback_used": True
             }
